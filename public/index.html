@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OneClaw WebChat</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 640px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+
+        #messages {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            min-height: 200px;
+            padding: 0.75rem;
+            margin-bottom: 0.75rem;
+            background: #fafafa;
+        }
+
+        .msg {
+            margin-bottom: 0.5rem;
+        }
+
+        .msg.user {
+            color: #0066cc;
+        }
+
+        .msg.assistant {
+            color: #333;
+        }
+
+        #inputRow {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        #input {
+            flex: 1;
+            padding: 0.5rem;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+        }
+
+        #send {
+            padding: 0.5rem 1rem;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        #send:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        #reset {
+            padding: 0.5rem 1rem;
+            background: #666;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .error {
+            color: #c00;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>OneClaw WebChat</h1>
+    <div id="messages"></div>
+    <div id="inputRow">
+        <input id="input" type="text" placeholder="输入消息..." />
+        <button id="send">发送</button>
+        <button id="reset">重置会话</button>
+    </div>
+    <script>
+        const messagesEl = document.getElementById("messages");
+        const inputEl = document.getElementById("input");
+        const sendBtn = document.getElementById("send");
+        const resetBtn = document.getElementById("reset");
+        const SESSION_KEY = "main";
+
+        // 默认 token：请和 .env 中的 WEBCHAT_TOKEN 保持一致
+        // 例如 .env 里有：WEBCHAT_TOKEN=oneclaw-dev-token
+        const DEFAULT_TOKEN = "oneclaw-dev-token";
+
+        // 优先使用 URL 上的 ?token=xxx，没有的话才用默认
+        const urlParams = new URLSearchParams(location.search);
+        const token = urlParams.get("token") || DEFAULT_TOKEN;
+
+        // 统一构造请求头，带上 Authorization
+        function authHeaders() {
+            const headers = { "Content-Type": "application/json" };
+            if (token) {
+                headers["Authorization"] = "Bearer " + token;
+            }
+            return headers;
+        }
+
+        function addMessage(role, text, isError = false) {
+            const div = document.createElement("div");
+            div.className = "msg " + role + (isError ? " error" : "");
+            div.textContent = (role === "user" ? "你: " : "助手: ") + text;
+            messagesEl.appendChild(div);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        async function send() {
+            const message = inputEl.value.trim();
+            if (!message) return;
+            addMessage("user", message);
+            inputEl.value = "";
+            sendBtn.disabled = true;
+            try {
+                const res = await fetch("/api/chat", {
+                    method: "POST",
+                    headers: authHeaders(),
+                    body: JSON.stringify({ message, sessionKey: SESSION_KEY }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    addMessage("assistant", data.error || "请求失败", true);
+                    return;
+                }
+                addMessage("assistant", data.reply || "");
+                if (data.sessionId) localStorage.setItem("oneclaw_sessionId", data.sessionId);
+            } catch (e) {
+                addMessage("assistant", "网络错误: " + e.message, true);
+            } finally {
+                sendBtn.disabled = false;
+            }
+        }
+
+        async function reset() {
+            resetBtn.disabled = true;
+            try {
+                const res = await fetch("/api/session/reset", {
+                    method: "POST",
+                    headers: authHeaders(),
+                    body: JSON.stringify({ sessionKey: SESSION_KEY }),
+                });
+                const data = await res.json();
+                if (res.ok && data.sessionId) {
+                    localStorage.setItem("oneclaw_sessionId", data.sessionId);
+                    messagesEl.innerHTML = "";
+                } else if (!res.ok) {
+                    addMessage("assistant", data.error || "重置失败", true);
+                }
+            } catch (e) {
+                addMessage("assistant", "网络错误: " + e.message, true);
+            } finally {
+                resetBtn.disabled = false;
+            }
+        }
+
+        sendBtn.addEventListener("click", send);
+        inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+        resetBtn.addEventListener("click", reset);
+    </script>
+</body>
+
+</html>

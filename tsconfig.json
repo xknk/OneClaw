@@ -1,0 +1,23 @@
+{
+    "compilerOptions": {
+      /* 基础设置 */
+      "target": "ES2020",                 // 编译出的代码遵循 ES2020 标准（支持可选链、空值合并等）
+      "module": "ESNext",                 // 产物使用最新的 ES 模块化标准 (import/export)
+      "moduleResolution": "Node",         // 模仿 Node.js 的模块解析规则，确保能找到 node_modules 里的库
+      "rootDir": "src",                   // 源代码的根目录
+      "outDir": "dist",                   // 编译后的代码输出到该目录
+      "esModuleInterop": true,            // 允许以简洁方式导入 CommonJS 模块（如：import express from 'express'）
+      "skipLibCheck": true,               // 跳过对第三方库声明文件 (*.d.ts) 的检查，加快编译速度
+      
+      /* 类型安全检查 */
+      "strict": true,                     // 开启所有严格的类型检查，代码更健壮，是 TS 开发的标准做法
+  
+      /* 路径别名配置 */
+      "baseUrl": ".",                     // 解析非绝对路径时的基准目录（设为根目录）
+      "paths": {
+        "@/*": ["src/*"]                  // 配置别名：输入 @/ 时，TS 会去 src/ 目录下查找文件
+      }
+    },
+    "include": ["src"]                    // 明确只处理 src 目录下的 TS 文件
+  }
+  

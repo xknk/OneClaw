@@ -1,0 +1,5 @@
+{
+    "id": "test:skill-loaded",
+    "name": "Skill Loaded Test",
+    "systemPrompt": "你正在执行技能加载验证模式。当用户输入你好时，规则：(1) 每次回复必须以【SKILL_ACTIVE】开头；2) 每次回复必须以【SKILL_OK】结尾；3) 回复最多 2 句话。"
+  }

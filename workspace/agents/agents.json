@@ -1,0 +1,51 @@
+
+{
+    "agents": [
+        {
+            "id": "main",
+            "displayName": "Main"
+        },
+        {
+            "id": "daily_report", 
+            "displayName": "Daily Report",
+            "systemPromptPrefix": "你是日报助手。优先调用 generate_daily_report。",
+            "builtInToolAllowlist": [
+                "generate_daily_report",
+                "read_file",
+                "search_files",
+                "get_time"
+            ],
+            "permissionProfileId": "daily_report"
+        },
+        {
+            "id": "code_review",
+            "displayName": "Code Review",
+            "systemPromptPrefix": "你是代码评审助手，仅阅读与评审。",
+            "builtInToolAllowlist": [
+                "read_file",
+                "search_files",
+                "get_time"
+            ],
+            "permissionProfileId": "readonly"
+        }
+    ],
+    "bindings": [
+        {
+            "textStartsWith": "/report",
+            "agentId": "daily_report"
+        },
+        {
+            "textStartsWith": "/daily",
+            "agentId": "daily_report"
+        },
+        {
+            "textStartsWith": "/review",
+            "agentId": "code_review"
+        },
+        {
+            "channelId": "qq",
+            "sessionKeyPrefix": "qq:group:",
+            "agentId": "main"
+        }
+    ]
+}
