@@ -1,0 +1,44 @@
+# 自动化流程的名字，显示在 GitHub 仓库的 Actions 标签页
+name: CI
+
+# 触发条件：什么时候开始跑这个流程？
+on:
+  push:
+    # 当代码推送到这两个主分支时触发
+    branches: [main, master]
+  pull_request:
+    # 当有人提交合并请求（PR）时触发，确保新代码不会破坏现有功能
+
+jobs:
+  # 定义一个名为 build 的任务
+  build:
+    # 运行环境：使用 GitHub 提供的最新版 Ubuntu 虚拟机
+    runs-on: ubuntu-latest
+
+    # 任务的具体执行步骤
+    steps:
+      # 1. 拉取代码：把你的仓库代码下载到虚拟机里
+      - uses: actions/checkout@v4
+
+      # 2. 安装 pnpm：因为你的项目使用 pnpm 而非 npm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9 # 指定使用 pnpm v9 版本
+
+      # 3. 设置 Node.js 环境
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18" # 使用的 Node 18 LTS 版本
+          cache: "pnpm"      # 开启缓存，下次跑 CI 时安装依赖会快很多
+
+      # 4. 安装依赖：执行 pnpm install
+      - run: pnpm install
+
+      # 5. 静态类型检查：运行你 package.json 里的 typecheck 脚本 (通常是 tsc)
+      - run: pnpm run typecheck
+
+      # 6. 单元测试：运行你刚才看到的那些 Vitest 测试用例
+      - run: pnpm run test
+
+      # 7. 冒烟测试：执行那个“启动并立即关闭”的服务启动测试
+      - run: pnpm run smoke
