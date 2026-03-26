@@ -18,6 +18,7 @@ import type { Tool } from "./types";
  */
 const MAX_TOOL_ROUNDS = 5;
 
+type executeTool = (toolName: string, args: Record<string, unknown> | undefined) => Promise<string>
 export interface RunAgentOptions {
     /** 允许外部自定义最大尝试次数 */
     maxToolRounds?: number;
@@ -44,6 +45,13 @@ export interface RunAgentOptions {
         ok: boolean;
         durationMs: number; // 执行耗时（毫秒）
     }) => Promise<void> | void;
+    /**
+     * 执行工具的函数
+     * @param toolName 工具名称
+     * @param args 工具入参
+     * @returns 工具执行结果
+     */
+    executeTool?: executeTool;
 }
 
 /**
@@ -106,31 +114,14 @@ export async function runAgent(
          */
         for (const call of toolCalls) {
             const startedAt = Date.now(); // 【新增】记录开始时间
-            let result: string;
-            // --- 关键步骤 A: 权限拦截 ---
-            // 在执行任何代码/文件操作前，先通过外部传入的 toolGuard 校验安全性
-            const denied = options?.toolGuard?.(call.name, call.args);
-            if (denied) {
-                // 如果被拒绝，将拒绝原因伪装成“工具执行结果”反馈给 AI，让 AI 知道此路不通
-                result = denied;
-            } else {
-                const tool = getTool(call.name); // 根据名称从注册中心查找工具实例
-                if (!tool) {
-                    // 异常处理：模型可能幻觉出了一个不存在的工具名
-                    result = `错误：未知工具 "${call.name}"`;
-                } else {
-                    try {
-                        // 执行具体的业务逻辑（如搜索、计算、请求 API 等）
-                        result = await tool.execute(call.args);
-                    } catch (err) {
-                        // 俘获工具内部执行错误，并将错误信息反馈给 LLM，让它尝试修复或换个方案
-                        result = `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
-                    }
-                }
-            }
-            
+            // 调用单个工具的执行函数
+            const result = await executeSingleTool(call.name, call.args, {
+                executeTool: options?.executeTool,
+                toolGuard: options?.toolGuard,
+            });
             // --- C. 后处理阶段 (监控与日志) ---
             const durationMs = Date.now() - startedAt; // 【新增】计算耗时
+            // 调用工具执行后的回调函数
             options?.onToolCallFinished?.({
                 toolName: call.name,
                 args: call.args,
@@ -158,3 +149,40 @@ export async function runAgent(
      */
     return lastContent;
 }
+
+/**
+ * 独立出的工具执行逻辑
+ * 这里的参数去掉了 options 整体，转而接收具体的钩子函数
+ */
+async function executeSingleTool(
+    name: string,
+    args: Record<string, unknown> | undefined,
+    hooks: {
+        executeTool?: RunAgentOptions['executeTool'];
+        toolGuard?: RunAgentOptions['toolGuard'];
+    }
+): Promise<string> {
+    // 1. 优先使用外部注入的自定义执行器
+    if (hooks.executeTool) {
+        return await hooks.executeTool(name, args);
+    }
+
+    // 2. 权限校验 (toolGuard)
+    const deniedReason = hooks.toolGuard?.(name, args);
+    if (deniedReason) {
+        return deniedReason;
+    }
+
+    // 3. 默认执行路径：从注册中心查找
+    const tool = getTool(name);
+    if (!tool) {
+        return `错误：未知工具 "${name}"`;
+    }
+
+    try {
+        return await tool.execute(args ?? {});
+    } catch (err) {
+        return `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
+    }
+}
+

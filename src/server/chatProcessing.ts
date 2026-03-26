@@ -1,7 +1,6 @@
 import crypto from "node:crypto"
 import { runAgent } from "@/agent/runAgent";
 import { getAllTools } from "@/agent/tools";
-import { getCombinedToolSchemasForContext  } from "@/agent/withSkills";
 import { UnifiedInboundMessage, UnifiedOutboundMessage } from "@/channels/unifiedMessage";
 import { appConfig } from "@/config/evn";
 import { ChatMessage } from "@/llm/model";
@@ -16,10 +15,21 @@ import { appendToolCallLog, makeToolCallLog } from "@/agent/toolCallLog";
 import {
     getAgentConfig,
     resolveAgentId,
-    normalizeTextForAgent
+    normalizeTextForAgent,
+    getBuiltInToolAllowlistForAgent
 } from "@/agent/agentRegistry";
 import { rebuildRuntimeSkillTools } from "@/skills/toolImplRegistry";
+import {
+    createRegistryWithProviders,
+    ToolExecutionService,
+    builtinProvider,
+    createRuntimeSkillProvider,
+    type ToolDefinition,
+} from "@/tools";
 
+import { ProviderHealth } from "@/tools/providerHealth";
+import { createMcpProvider } from "@/tools/providers/mcpProvider";
+import { mcpClientStub } from "@/tools/mcpClient";
 
 /** 
  * 定义出站发送函数的类型签名
@@ -34,6 +44,17 @@ export const DEFAULT_SESSION_KEY: SessionKey = "main";
 function resolveSessionKey(inbound: UnifiedInboundMessage): SessionKey {
     return (inbound.sessionKey ?? DEFAULT_SESSION_KEY) as SessionKey;
 }
+
+/**
+ * 辅助函数：根据白名单过滤工具 Schema
+ * @param items 待过滤的工具列表
+ * @param allow 允许的工具名集合（Set）。如果为 null，则表示不限制，允许全部。
+ */
+function filterSchemasByAllowlist<T extends { name: string }>(items: T[], allow: Set<string> | null): T[] {
+    if (!allow) return items;
+    return items.filter((x) => allow.has(x.name));
+}
+
 /**
  * 统一聊天处理器（核心逻辑管道）
  * 流程：入站 -> 获取会话 -> 读取历史 -> 自动摘要/裁剪 -> 注入技能 -> 调用 Agent -> 存储回复 -> 出站回传
@@ -107,8 +128,10 @@ export async function handleUnifiedChat(
 
 
     // 7. 技能（System Prompt）注入
+
     // 从 Workspace 动态加载自定义的系统提示词，决定 AI 的身份和能力边界
-    const { systemPrompts, skills  } = await loadSkillsForContext(skillCtx);
+    const loaded = await loadSkillsForContext(skillCtx);
+    const { systemPrompts, skills, toolSchemas: skillToolSchemas } = loaded;
     rebuildRuntimeSkillTools(skills);
     if (systemPrompts.length > 0) {
         prefixBlocks.push({ role: "system", content: systemPrompts.join("\n\n") });
@@ -118,37 +141,74 @@ export async function handleUnifiedChat(
         messages = [...prefixBlocks, ...messages];
     }
 
-    // 4. 调用 Agent 引擎
-    // 传入消息上下文、工具库定义及其对应的 Schema，进行推理和执行
-    const toolSchemas = await getCombinedToolSchemasForContext (skillCtx);
-    const replyText = await runAgent(messages, getAllTools(),
-        {
-            toolSchemas,
-            toolGuard: (toolName, args) =>
-                checkToolPermission({
+    // Agent allowlist（模型可见 + 执行都要生效）
+    const allow = getBuiltInToolAllowlistForAgent(agentId);
+
+    // 创建健康状态检查
+    const providerHealth = new ProviderHealth({
+        failureThreshold: 3,
+        cooldownMs: 30_000,
+    });
+    // 创建 MCP 工具提供者
+    const mcpProvider = createMcpProvider({
+        server: "user-fetch",
+        client: mcpClientStub,
+        allowedToolNames: [], // 先空 or 指定只读工具
+    });
+    // 创建工具注册表
+    const registry = createRegistryWithProviders([
+        createRuntimeSkillProvider(filterSchemasByAllowlist(skillToolSchemas, allow)),
+        builtinProvider,
+    ]);
+    // 创建工具执行服务
+    const execService = new ToolExecutionService({
+        registry, // 工具注册表
+        health: providerHealth, // 健康状态检查
+        ctx: { // 当前执行的上下文（用户、会话等）
+            traceId, // 追踪 ID
+            channelId: inbound.channelId, // 渠道标识
+            sessionKey, // 会话标识
+            agentId, // 执行任务的 Agent ID
+            profileId, // 权限配置 ID
+        },
+        toolGuard: (toolName, args) => // 工具守卫（拦截器）
+            checkToolPermission( // 检查工具权限
+                {
                     channelId: inbound.channelId, // 渠道标识
                     sessionKey, // 会话标识
                     agentId, // 执行任务的 Agent ID
                     profileId, // 权限配置 ID
                 },
-                    toolName, // 工具名称
-                    args, // 工具入参
-                ),
-            // 5.2 日志审计：工具执行后，立即通过 makeToolCallLog 格式化并写入 JSONL 文件
-            onToolCallFinished: async (event) => {
-                const line = makeToolCallLog({
-                    traceId, // 绑定 traceId，方便在日志文件中搜索特定一次对话的所有动作
-                    sessionKey, // 会话标识
-                    agentId, // 执行任务的 Agent ID
-                    toolName: event.toolName,
-                    args: event.args, // 工具入参
-                    result: event.result, // 工具执行结果
-                    ok: event.ok, // 工具执行是否成功
-                    durationMs: event.durationMs, // 工具执行耗时
-                });
-                await appendToolCallLog(line);
-            },
-        });
+                toolName, // 工具名称
+                args, // 工具入参
+            ),
+        onFinished: async (event) => { // 工具执行完成后触发
+            const line = makeToolCallLog({
+                traceId, // 追踪 ID
+                sessionKey, // 会话标识
+                agentId, // 执行任务的 Agent ID
+                toolName: event.toolName, // 工具名称
+                args: event.args, // 工具入参
+                result: event.result, // 工具执行结果
+                ok: event.ok, // 工具执行是否成功
+                durationMs: event.durationMs, // 工具执行耗时
+            });
+            await appendToolCallLog(line); // 将工具执行日志写入 JSONL 文件
+        },
+    });
+
+    // 统一从执行服务拿 schemas，再给 runAgent（定义与执行彻底同源）
+    let toolSchemas = await execService.getToolSchemas();
+    toolSchemas = filterSchemasByAllowlist(toolSchemas, allow);
+
+
+    // 执行工具
+    const replyText = await runAgent(messages, getAllTools(),
+        {
+            toolSchemas, // 工具元数据
+            executeTool: (toolName, args) => execService.execute(toolName, args), // 执行工具
+        }); // 执行 Agent
+
     // 5. 结果持久化并更新会话活跃状态
     await appendMessage(sessionId, "assistant", replyText, agentId);
     // 更新会话活跃状态

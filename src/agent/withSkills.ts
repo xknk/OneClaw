@@ -1,4 +1,4 @@
-// src/agent/withSkills.ts
+// src/agent/withSkills.ts - 兼容旧逻辑，调试使用，后续废弃
 
 import { getToolSchemas } from "./tools/index";
 import type { ToolSchema } from "@/llm/providers/ModelProvider";
@@ -18,7 +18,7 @@ function filterSchemasByAllowlist(schemas: ToolSchema[], allow: Set<string> | nu
 }
 
 /**
- * 【汇总工具集】
+ * 【汇总工具集】- 标注仅兼容/调试用
  * 将“系统内置工具”与“外部 Skill 扩展工具”进行合并。
  * 该函数后续可替代 runAgent 中硬编码的 getToolSchemas()，实现动态能力加载。
  */
