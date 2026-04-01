@@ -1,8 +1,7 @@
 import type { McpClient, McpToolDescriptor } from "./providers/mcpProvider";
 
-/**
- * 先做 stub，后续再接你真实的 MCP 调用实现（比如 CallMcpTool / descriptor 文件）
- */
+/** 占位用；真实 stdio 接入见 mcpRegistry + RoutingMcpSdkClient */
+
 export const mcpClientStub: McpClient = {
     async listTools(_server: string): Promise<McpToolDescriptor[]> {
         return []; // 先返回空，接入时再改

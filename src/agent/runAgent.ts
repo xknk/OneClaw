@@ -11,178 +11,188 @@ import type { ChatMessage, AgentMessage, ToolSchema } from "@/llm/providers/Mode
 import { chatWithModelWithTools } from "@/llm/model";
 import { getTool, getToolSchemas } from "./tools/index";
 import type { Tool } from "./types";
+import type { ToolGuardResult } from "@/security/toolGuard";
+import { normalizeToolGuardResult } from "@/security/toolGuard";
 
-/** 
+/**
  * 默认最大迭代轮数。
  * 作用：防止 LLM 陷入逻辑死循环（例如：工具报错 -> LLM 重试 -> 工具又报错）导致 Token 消耗失控。
  */
 const MAX_TOOL_ROUNDS = 5;
 
-type executeTool = (toolName: string, args: Record<string, unknown> | undefined) => Promise<string>
+/**
+ * 定义工具执行器的类型签名
+ */
+type executeTool = (toolName: string, args: Record<string, unknown> | undefined) => Promise<string>;
+
+/**
+ * Agent 运行配置选项
+ */
 export interface RunAgentOptions {
-    /** 允许外部自定义最大尝试次数 */
+    /** 最大迭代轮数，默认 5 */
     maxToolRounds?: number;
-    /** 
-     * 允许传入自定义的工具元数据。
-     * 例如在多 Agent 场景下，不同 Agent 可能拥有完全不同的工具权限集。
-     */
+    /** 可选：手动传入工具定义，若不传则从全局 getToolSchemas 获取 */
     toolSchemas?: ToolSchema[];
     /**
-   * 钩子函数：在工具真正执行前进行权限校验
-   * @param toolName 工具名称
-   * @param args 工具入参
-   * @returns 返回 null 表示允许执行；返回字符串则将其作为“拒绝原因”反馈给 AI
-   */
-    toolGuard?: (toolName: string, args: Record<string, unknown> | undefined) => string | null;
-    /**
-   * 执行反馈钩子：工具执行后的“记录仪”
-   * 用于将执行细节（含耗时、成功状态）发送给日志系统或监控面板
-   */
+     * 工具执行前权限校验钩子。
+     * 返回 null 表示放行；返回 string 为拒绝文案；
+     * 也可返回完整的 ToolGuardResult 包含错误码和元数据。
+     */
+    toolGuard?: (
+        toolName: string,
+        args: Record<string, unknown> | undefined
+    ) => string | null | ToolGuardResult;
+    /** 工具调用完成后的回调（无论成功失败），常用于审计日志或埋点 */
     onToolCallFinished?: (event: {
         toolName: string;
         args: Record<string, unknown> | undefined;
         result: string;
         ok: boolean;
-        durationMs: number; // 执行耗时（毫秒）
+        durationMs: number;
     }) => Promise<void> | void;
-    /**
-     * 执行工具的函数
-     * @param toolName 工具名称
-     * @param args 工具入参
-     * @returns 工具执行结果
-     */
+    /** 自定义工具执行逻辑，若提供则绕过本地 getTool 执行逻辑 */
     executeTool?: executeTool;
+    /** 模型生命周期事件通知，可用于前端展示进度条或 Token 计算 */
+    onModelEvent?: (event: {
+        type: "llm.request" | "llm.response";
+        round: number;
+        toolCallCount?: number;
+        contentLength?: number;
+    }) => Promise<void> | void;
 }
 
 /**
- * 运行 Agent 任务的主入口函数
- * @param messages 初始用户输入或对话上下文
- * @param _tools 工具对象列表（目前主要通过 getTool 动态获取，此处保留用于扩展）
+ * runAgent: 执行 Agent 任务的核心入口
+ * 
+ * @param messages 初始对话历史
+ * @param _tools (占位参数) 兼容性工具列表
  * @param options 控制参数
- * @returns 最终生成的文本回复
+ * @returns 最终 LLM 生成的回复字符串
  */
 export async function runAgent(
     messages: ChatMessage[],
     _tools: Tool[],
     options?: RunAgentOptions
 ): Promise<string> {
-    // 1. 初始化：设置最大轮数和工具定义
     const maxRounds = options?.maxToolRounds ?? MAX_TOOL_ROUNDS;
     const toolSchemas = options?.toolSchemas ?? getToolSchemas();
 
-    /** 
-     * 关键变量：agentMessages。
-     * 它是 Agent 的“短期记忆”，会在循环中不断追加 assistant 的思考和 tool 的执行结果。
-     */
+    // 拷贝并维护一份 Agent 内部的消息列表，用于在循环中不断追加上下文
     const agentMessages: AgentMessage[] = [...messages];
     let round = 0;
-    let lastContent = ""; // 存储 LLM 最后一次生成的文本片段
+    let lastContent = "";
 
-    // 开启推理-执行循环
+    // --- ReAct 核心循环开始 ---
     while (round < maxRounds) {
         round++;
 
-        /**
-         * 步骤 A: 询问模型。
-         * 将当前全量的上下文（含之前轮次的工具结果）发送给 LLM。
-         */
+        // 1. 发起推理请求
+        await options?.onModelEvent?.({
+            type: "llm.request",
+            round,
+            contentLength: agentMessages.length,
+        });
+
+        // 调用模型获取响应：包含 content (回复文本) 和 toolCalls (工具调用请求)
         const { content, toolCalls } = await chatWithModelWithTools(agentMessages, toolSchemas);
         lastContent = content;
 
-        /**
-         * 步骤 B: 判断终止条件。
-         * 如果模型没有返回任何 toolCalls，说明它认为任务已完成，或者它直接给出了最终答案。
-         */
+        await options?.onModelEvent?.({
+            type: "llm.response",
+            round,
+            toolCallCount: toolCalls.length,
+            contentLength: content?.length ?? 0,
+        });
+
+        // 【出口】：如果模型不再需要调用任何工具，认为任务已完成，直接返回内容
         if (toolCalls.length === 0) {
             return content || lastContent;
         }
 
-        /**
-         * 步骤 C: 记录模型的“决策过程”。
-         * 将模型发出的工具调用请求 (role: assistant) 存入历史。
-         * 这是必须的，因为下一轮 LLM 需要看到自己“刚才做了什么”。
-         */
+        // 2. 准备执行工具：先将模型生成的回复和调用请求记录到上下文中
         agentMessages.push({
             role: "assistant",
             content,
             tool_calls: toolCalls.map((tc) => ({ name: tc.name, args: tc.args })),
         });
 
-        /**
-         * 步骤 D: 并行/顺序执行工具。
-         * 遍历本次响应中所有的工具调用请求。
-         */
+        // 3. 执行行动 (Acting)：并行或串行处理模型请求的所有工具
         for (const call of toolCalls) {
-            const startedAt = Date.now(); // 【新增】记录开始时间
-            // 调用单个工具的执行函数
+            const startedAt = Date.now();
+            
+            // 执行具体工具
             const result = await executeSingleTool(call.name, call.args, {
                 executeTool: options?.executeTool,
                 toolGuard: options?.toolGuard,
             });
-            // --- C. 后处理阶段 (监控与日志) ---
-            const durationMs = Date.now() - startedAt; // 【新增】计算耗时
-            // 调用工具执行后的回调函数
+
+            const durationMs = Date.now() - startedAt;
+
+            // 触发工具调用结束回调
             options?.onToolCallFinished?.({
                 toolName: call.name,
                 args: call.args,
                 result,
-                ok: !result.startsWith("错误："),
+                // 根据结果字符串前缀简单判断执行状态
+                ok: !(
+                    result.startsWith("错误：") ||
+                    result.startsWith("无权限：") ||
+                    result.startsWith("参数错误：") ||
+                    result.startsWith("工具执行失败:")
+                ),
                 durationMs,
             });
 
-            /**
-             * 步骤 E: 反馈执行结果。
-             * 将工具产出的真实数据 (role: tool) 存入消息队列。
-             * 这一步完成后，循环回到步骤 A，LLM 将根据这个 result 进行下一步推理。
-             */
+            // 4. 反馈 (Observation)：将工具返回的结果推入消息流
+            // LLM 在下一轮循环中会基于此结果进行后续推理
             agentMessages.push({
                 role: "tool",
                 tool_name: call.name,
-                content: result
+                content: result,
             });
         }
     }
 
-    /**
-     * 如果达到 MAX_TOOL_ROUNDS 仍未跳出循环：
-     * 说明任务过于复杂或者 LLM 陷入了死循环，直接返回已有的最后内容。
-     */
+    // 若达到最大轮数仍未给出最终结果，返回最后一次生成的内容
     return lastContent;
 }
 
 /**
- * 独立出的工具执行逻辑
- * 这里的参数去掉了 options 整体，转而接收具体的钩子函数
+ * executeSingleTool: 执行单个工具的封装函数
+ * 
+ * 包含：权限守卫检查 -> 工具查找 -> 执行 -> 异常捕获
  */
 async function executeSingleTool(
     name: string,
     args: Record<string, unknown> | undefined,
     hooks: {
-        executeTool?: RunAgentOptions['executeTool'];
-        toolGuard?: RunAgentOptions['toolGuard'];
+        executeTool?: RunAgentOptions["executeTool"];
+        toolGuard?: RunAgentOptions["toolGuard"];
     }
 ): Promise<string> {
-    // 1. 优先使用外部注入的自定义执行器
+    // 场景 A：如果外部提供了自定义执行器，直接透传执行
     if (hooks.executeTool) {
         return await hooks.executeTool(name, args);
     }
 
-    // 2. 权限校验 (toolGuard)
-    const deniedReason = hooks.toolGuard?.(name, args);
-    if (deniedReason) {
-        return deniedReason;
+    // 场景 B：使用默认执行逻辑
+    // 1. 权限拦截校验
+    const guard = normalizeToolGuardResult(hooks.toolGuard?.(name, args));
+    if (!guard.allow) {
+        return guard.message; // 返回拦截信息给 LLM，让 LLM 决定如何回复用户
     }
 
-    // 3. 默认执行路径：从注册中心查找
+    // 2. 从注册表获取工具实例
     const tool = getTool(name);
     if (!tool) {
         return `错误：未知工具 "${name}"`;
     }
 
+    // 3. 执行工具并处理潜在的运行时错误
     try {
         return await tool.execute(args ?? {});
     } catch (err) {
+        // 捕获异常并将错误转化为文本，传回给 LLM 尝试自愈或报错
         return `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
     }
 }
-

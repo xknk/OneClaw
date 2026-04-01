@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { runOnboard } from "./cli/onboard";
 import { runDoctor } from "./cli/doctor";
 import { runStart } from "./cli/start";
+import { registerTraceCommands } from "./cli/trace";
 
 const program = new Command(); // 创建一个 Commander 实例
 
@@ -33,6 +34,9 @@ program
     .command("start")
     .description("启动 Gateway（WebChat 服务）")
     .action(runStart);
+
+
+registerTraceCommands(program);
 
 // 解析命令行参数（这行最重要，不写它程序就没反应）
 program.parse();

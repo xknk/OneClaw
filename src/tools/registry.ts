@@ -85,9 +85,10 @@ export class ToolRegistry {
     async resolveByName(
         name: string,
         ctx: ToolExecutionContext,
+        opts?: { health?: ProviderHealth }
     ): Promise<ResolvedTool | null> {
         // 先获取去重并排序后的完整工具列表
-        const all = await this.listResolved(ctx);
+        const all = await this.listResolved(ctx, opts);
         // 查找匹配名称的工具，找不到则返回 null
         return all.find((x) => x.definition.name === name) ?? null;
     }

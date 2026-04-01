@@ -6,6 +6,8 @@
 import fs from "fs/promises";
 import path from "path";
 import { appConfig, ollamaConfig, PORT } from "../config/evn";
+import { loadMcpServerConfigs } from "../config/mcpConfig";
+
 type Status = "ok" | "warn" | "fail";
 /**
  * 格式化输出自检结果
@@ -77,7 +79,16 @@ export async function runDoctor(): Promise<void> {
         // 捕获网络连接失败（如 Ollama 未启动）
         line("fail", "无法连接 Ollama", `确认 Ollama 已启动且 OLLAMA_BASE_URL=${baseUrl}`);
     }
-    // 5. 工具策略检查 (Tool-policy)
+
+    // 5. MCP 服务检查 (MCP Check)
+    const mcp = loadMcpServerConfigs();
+    if (mcp.length) {
+        line("ok", `MCP 已配置 ${mcp.length} 个 stdio 服务: ${mcp.map((x) => x.id).join(", ")}`);
+    } else {
+        line("ok", "未配置 MCP（不设 ONECLAW_MCP_SERVERS 则不加载外部 MCP 工具）");
+    }
+
+    // 6. 工具策略检查 (Tool-policy)
     if (appConfig.execEnabled) {
         line("warn", "exec 工具已启用，可执行任意 shell 命令", "仅在受控环境使用；可通过 ONECLAW_EXEC_ENABLED=false 关闭");
     } else {

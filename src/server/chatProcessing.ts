@@ -10,7 +10,7 @@ import { summarizeMessages } from "@/session/summarizeContext";
 import { appendMessage, readMessages } from "@/session/transcript";
 import { SessionKey } from "@/session/type";
 import { loadSkillsForContext } from "@/skills/loadSkills";
-import { checkToolPermission, resolveProfileId } from "@/security/policy";
+import { evaluateToolPermission, resolveProfileId } from "@/security/policy";
 import { appendToolCallLog, makeToolCallLog } from "@/agent/toolCallLog";
 import {
     getAgentConfig,
@@ -28,8 +28,10 @@ import {
 } from "@/tools";
 
 import { ProviderHealth } from "@/tools/providerHealth";
-import { createMcpProvider } from "@/tools/providers/mcpProvider";
-import { mcpClientStub } from "@/tools/mcpClient";
+import { emitTrace } from "@/observability/trace";
+
+
+import { getMcpProvidersForRegistry } from "@/tools/mcpRegistry";
 
 /** 
  * 定义出站发送函数的类型签名
@@ -54,7 +56,11 @@ function filterSchemasByAllowlist<T extends { name: string }>(items: T[], allow:
     if (!allow) return items;
     return items.filter((x) => allow.has(x.name));
 }
-
+// 创建健康状态检查
+const providerHealth = new ProviderHealth({
+    failureThreshold: 3,
+    cooldownMs: 30_000,
+});
 /**
  * 统一聊天处理器（核心逻辑管道）
  * 流程：入站 -> 获取会话 -> 读取历史 -> 自动摘要/裁剪 -> 注入技能 -> 调用 Agent -> 存储回复 -> 出站回传
@@ -77,6 +83,17 @@ export async function handleUnifiedChat(
     // 标准化用户输入的文本内容
     const userText = normalizeTextForAgent(agentId, inbound.text);
 
+
+    const traceBase = {
+        traceId,
+        sessionKey,
+        agentId,
+        channelId: inbound.channelId,
+        profileId,
+    };
+    await emitTrace(traceBase, "session.start", {
+        meta: { textLength: userText.length },
+    });
     /**
      * 2. 构造技能运行上下文
      * 这是“按需加载”的核心。它将决定哪些技能 JSON 会被激活
@@ -144,19 +161,12 @@ export async function handleUnifiedChat(
     // Agent allowlist（模型可见 + 执行都要生效）
     const allow = getBuiltInToolAllowlistForAgent(agentId);
 
-    // 创建健康状态检查
-    const providerHealth = new ProviderHealth({
-        failureThreshold: 3,
-        cooldownMs: 30_000,
-    });
+
     // 创建 MCP 工具提供者
-    const mcpProvider = createMcpProvider({
-        server: "user-fetch",
-        client: mcpClientStub,
-        allowedToolNames: [], // 先空 or 指定只读工具
-    });
+    const mcpProviders = getMcpProvidersForRegistry();
     // 创建工具注册表
     const registry = createRegistryWithProviders([
+        ...mcpProviders,
         createRuntimeSkillProvider(filterSchemasByAllowlist(skillToolSchemas, allow)),
         builtinProvider,
     ]);
@@ -172,7 +182,7 @@ export async function handleUnifiedChat(
             profileId, // 权限配置 ID
         },
         toolGuard: (toolName, args) => // 工具守卫（拦截器）
-            checkToolPermission( // 检查工具权限
+            evaluateToolPermission( // 检查工具权限
                 {
                     channelId: inbound.channelId, // 渠道标识
                     sessionKey, // 会话标识
@@ -192,9 +202,11 @@ export async function handleUnifiedChat(
                 result: event.result, // 工具执行结果
                 ok: event.ok, // 工具执行是否成功
                 durationMs: event.durationMs, // 工具执行耗时
+                errorCode: event.errorCode, // 错误码
             });
             await appendToolCallLog(line); // 将工具执行日志写入 JSONL 文件
         },
+        trace: (eventType, patch) => emitTrace(traceBase, eventType as any, patch as any),
     });
 
     // 统一从执行服务拿 schemas，再给 runAgent（定义与执行彻底同源）
@@ -207,6 +219,10 @@ export async function handleUnifiedChat(
         {
             toolSchemas, // 工具元数据
             executeTool: (toolName, args) => execService.execute(toolName, args), // 执行工具
+            onModelEvent: (e) =>
+                emitTrace(traceBase, e.type, {
+                    meta: { round: e.round, toolCallCount: e.toolCallCount, contentLength: e.contentLength },
+                }),
         }); // 执行 Agent
 
     // 5. 结果持久化并更新会话活跃状态
@@ -217,5 +233,9 @@ export async function handleUnifiedChat(
     await sendOutbound({
         text: replyText,
         metadata: { traceId, agentId, profileId },
+    });
+    await emitTrace(traceBase, "session.end", {
+        ok: true,
+        meta: { replyLength: replyText.length },
     });
 }

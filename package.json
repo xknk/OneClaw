@@ -13,12 +13,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke": "tsx scripts/smoke-server.ts",
-    "ci": "pnpm run typecheck && pnpm run test && pnpm run smoke"
+    "ci": "pnpm run typecheck && pnpm run test && pnpm run smoke",
+    "trace": "tsx src/cli.ts trace"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
     "commander": "^12.0.0",
     "dotenv": "^17.3.1",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

@@ -7,7 +7,9 @@ import type {
     ToolProvider,
 } from "./types";
 import { ProviderHealth } from "./providerHealth";
-
+import type { ToolGuardResult } from "@/security/toolGuard";
+import { normalizeToolGuardResult } from "@/security/toolGuard";
+import { sanitizeToolArgsForTrace } from "@/security/auditSanitize";
 /**
  * 工具执行服务的配置选项
  */
@@ -19,8 +21,10 @@ export interface ToolExecutionServiceOptions {
      * 工具守卫（拦截器）
      * 在执行前检查权限。返回 string 表示拒绝原因，返回 null 表示允许执行。
      */
-    toolGuard?: (toolName: string, args: Record<string, unknown> | undefined) => string | null;
-
+    toolGuard?: (
+        toolName: string,
+        args: Record<string, unknown> | undefined
+    ) => string | null | ToolGuardResult;
     /** 
      * 钩子函数：工具执行完成后触发
      * 常用于审计日志、耗时统计或前端 UI 状态更新
@@ -41,6 +45,8 @@ export interface ToolExecutionServiceOptions {
     defaultBackoffMs?: number; // 默认 200ms
     maxCallsPerToolPerRequest?: number; // 默认 3
     health?: ProviderHealth;
+    trace?: (eventType: string, patch?: Record<string, unknown>) => Promise<void> | void;
+
 }
 
 /**
@@ -166,6 +172,7 @@ export class ToolExecutionService {
     private readonly maxCallsPerToolPerRequest: number;
     private readonly callCount = new Map<string, number>();
     private readonly health?: ProviderHealth;
+    private readonly trace?: ToolExecutionServiceOptions["trace"];
 
 
     constructor(options: ToolExecutionServiceOptions) {
@@ -178,6 +185,8 @@ export class ToolExecutionService {
         this.onFinished = options.onFinished; // 钩子函数：工具执行完成后触发
         this.maxCallsPerToolPerRequest = options.maxCallsPerToolPerRequest ?? 3; // 默认最大调用次数
         this.health = options.health; // 健康状态检查
+        this.trace = options.trace;  // 追踪事件
+
     }
 
     /**
@@ -206,6 +215,15 @@ export class ToolExecutionService {
         const used = (this.callCount.get(name) ?? 0) + 1;
         // 更新调用次数
         this.callCount.set(name, used);
+        
+        await this.trace?.("tool.execute.start", {
+            toolName: name,
+            toolSource: "guard",
+            ok: false,
+            durationMs: Date.now() - totalStarted,
+            errorCode: "TOOL_CALL_LIMIT_EXCEEDED",
+            attempt: 1,
+        });
         // 如果超过单请求最大调用次数，则返回错误描述
         if (used > this.maxCallsPerToolPerRequest) {
             const msg = `无权限：工具 ${name} 超过单请求最大调用次数 ${this.maxCallsPerToolPerRequest}`;
@@ -219,29 +237,55 @@ export class ToolExecutionService {
                 errorCode: "TOOL_CALL_LIMIT_EXCEEDED",
                 attempt: 1,
             });
+            await this.trace?.("tool.failed", {
+                toolName: name,
+                toolSource: "guard",
+                ok: false,
+                durationMs: Date.now() - totalStarted,
+                errorCode: "TOOL_CALL_LIMIT_EXCEEDED",
+                attempt: 1,
+            });
             return msg;
         }
 
 
         // --- 第一步：安全守卫 ---
-        const denied = this.toolGuard?.(name, args);
-        if (denied) { // 权限拒绝，直接返回错误描述
+        const guard = normalizeToolGuardResult(this.toolGuard?.(name, args));
+        if (!guard.allow) {
+            const deniedMsg = guard.message;
+            const policyCode = guard.errorCode;
+            const meta = sanitizeToolArgsForTrace(name, args, guard.auditMeta);
             await this.onFinished?.({
-                toolName: name,  // 工具名称
-                args, // 工具入参
-                result: denied, // 工具执行结果
-                ok: false, // 工具执行是否成功
-                durationMs: Date.now() - totalStarted, // 工具执行耗时
-                source: "policy", // 执行来源
-                errorCode: "TOOL_DENIED",
+                toolName: name,
+                args,
+                result: deniedMsg,
+                ok: false,
+                durationMs: Date.now() - totalStarted,
+                source: "policy",
+                errorCode: policyCode,
             });
-            return denied; // 权限拒绝，直接返回错误描述
+            await this.trace?.("tool.denied", {
+                toolName: name,
+                toolSource: "policy",
+                ok: false,
+                durationMs: Date.now() - totalStarted,
+                errorCode: policyCode,
+                attempt: 1,
+                meta,
+            });
+            return deniedMsg;
         }
 
         // --- 第二步：查找工具实现 ---
         const resolved = await this.registry.resolveByName(
             name, this.ctx,
+            { health: this.health }
         );
+        await this.trace?.("tool.resolve", {
+            toolName: name,
+            toolSource: resolved?.definition.source,
+            meta: { providerId: resolved?.provider.id },
+        });
         // 工具未找到，返回错误描述
         if (!resolved) {
             const msg = `错误：未知工具 "${name}"`;
@@ -254,6 +298,14 @@ export class ToolExecutionService {
                 source: "registry", // 执行来源
                 errorCode: "TOOL_NOT_FOUND",
             }); // 工具未找到，返回错误描述
+            await this.trace?.("tool.failed", {
+                toolName: name,
+                toolSource: "registry",
+                ok: false,
+                durationMs: Date.now() - totalStarted,
+                errorCode: "TOOL_NOT_FOUND",
+                attempt: 1,
+            });
             return msg;
         }
         // --- 第三步：参数格式验证 ---
@@ -268,6 +320,14 @@ export class ToolExecutionService {
                 source: resolved.definition.source, // 执行来源
                 errorCode: "TOOL_ARG_ERROR",
             }); // 参数格式验证失败，返回错误描述
+            await this.trace?.("tool.validation.failed", {
+                toolName: name,
+                toolSource: resolved.definition.source,
+                ok: false,
+                durationMs: Date.now() - totalStarted,
+                errorCode: "TOOL_ARG_ERROR",
+                attempt: 1,
+            });
             return validationError;
         }
 
@@ -286,7 +346,7 @@ export class ToolExecutionService {
             attempt++;
             const started = Date.now(); // 开始时间（毫秒）
             try {
-                const result = await await withTimeout(
+                const result = await withTimeout(
                     resolved.provider.execute(name, args, this.ctx),
                     timeoutMs
                 );
@@ -302,6 +362,14 @@ export class ToolExecutionService {
                         attempt,
                         errorCode: "TOOL_IMPL_MISSING",
                     });
+                    await this.trace?.("tool.failed", {
+                        toolName: name,
+                        toolSource: resolved.definition.source,
+                        ok: false,
+                        durationMs: Date.now() - totalStarted,
+                        errorCode: "TOOL_IMPL_MISSING",
+                        attempt,
+                    });
                     return msg;
                 }
                 last = result;
@@ -314,6 +382,14 @@ export class ToolExecutionService {
                         durationMs: result.durationMs, // 工具执行耗时
                         source: result.source, // 执行来源
                         attempt, // 重试次数
+                    });
+                    await this.trace?.("tool.execute.end", {
+                        toolName: name,
+                        toolSource: result.source ?? resolved.definition.source,
+                        ok: result.ok,
+                        durationMs: result.durationMs,
+                        errorCode: result.errorCode,
+                        attempt,
                     });
                     return result.content; // 返回工具执行结果
                 }
@@ -332,6 +408,15 @@ export class ToolExecutionService {
                     source: result.source ?? def.source, // 执行来源
                     attempt, // 重试次数
                     errorCode: result.errorCode, // 错误代码
+                });
+                await this.trace?.("tool.failed", {
+                    toolName: name,
+                    toolSource: resolved.definition.source,
+                    ok: false,
+                    durationMs: result.durationMs,
+                    attempt,
+                    errorCode: result.errorCode,
+
                 });
                 return result.content; // 返回工具执行结果
             } catch (err) {
@@ -368,6 +453,14 @@ export class ToolExecutionService {
                     attempt, // 重试次数
                     errorCode: timeoutResult.errorCode, // 错误代码
                 });
+                await this.trace?.("tool.failed", {
+                    toolName: name,
+                    toolSource: resolved.definition.source,
+                    ok: false,
+                    durationMs: Date.now() - totalStarted,
+                    errorCode: timeoutResult?.errorCode ?? "TOOL_EXEC_ERROR",
+                    attempt,
+                });
                 return timeoutResult.content;
             }
         }
@@ -381,6 +474,14 @@ export class ToolExecutionService {
             source: resolved.definition.source,
             attempt: maxRetries + 1,
             errorCode: last?.errorCode ?? "TOOL_EXEC_ERROR",
+        });
+        await this.trace?.("tool.failed", {
+            toolName: name,
+            toolSource: resolved.definition.source,
+            ok: false,
+            durationMs: Date.now() - totalStarted,
+            errorCode: last?.errorCode ?? "TOOL_EXEC_ERROR",
+            attempt: maxRetries + 1,
         });
         return fallback;
     }

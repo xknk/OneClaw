@@ -20,6 +20,7 @@ export interface ToolCallLogLine {
     ok: boolean;           // 是否执行成功
     durationMs: number;    // 耗时（毫秒）
     timestamp: string;     // ISO 格式的时间戳
+    errorCode?: string;    // 错误码
 }
 
 /**
@@ -74,27 +75,31 @@ function summarize(value: unknown, maxLen = 500): string {
  * 工厂函数：将原始调用数据转换为标准化的日志行对象
  */
 export function makeToolCallLog(input: {
-    traceId: string;
-    sessionKey: string;
-    agentId: string;
-    toolName: string;
-    args: Record<string, unknown> | undefined;
-    result: string;
-    ok: boolean;
-    durationMs: number;
+    traceId: string; // 调用追踪 ID
+    sessionKey: string; // 会话标识
+    agentId: string; // 执行任务的 Agent ID
+    toolName: string; // 调用的工具名称 (如 read_file)
+    args: Record<string, unknown> | undefined; // 工具入参
+    result: string; // 工具执行结果
+    ok: boolean; // 是否执行成功
+    durationMs: number; // 耗时（毫秒）
+    errorCode?: string; // 错误码
 }): ToolCallLogLine {
-    return {
+    const line: ToolCallLogLine = {
         traceId: input.traceId,
         sessionKey: input.sessionKey,
         agentId: input.agentId,
         toolName: input.toolName,
-        // 对参数和结果进行摘要处理，确保日志“干净且轻量”
         argsSummary: summarize(input.args),
         resultSummary: summarize(input.result),
         ok: input.ok,
         durationMs: input.durationMs,
         timestamp: new Date().toISOString(),
     };
+    if (input.errorCode !== undefined) {
+        line.errorCode = input.errorCode;
+    }
+    return line;
 }
 
 /**

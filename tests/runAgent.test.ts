@@ -146,4 +146,31 @@ describe("runAgent", () => {
         const second = vi.mocked(model.chatWithModelWithTools).mock.calls[1][0];
         expect(JSON.stringify(second)).toContain("无权限：测试拒绝");
     });
+    /**
+     * 测试 toolGuard 返回结构化拒绝时同样把 message 写入 tool 结果
+     */
+    it("toolGuard 返回结构化拒绝时同样把 message 写入 tool 结果", async () => {
+        vi.mocked(model.chatWithModelWithTools)
+            .mockResolvedValueOnce({
+                content: "",
+                toolCalls: [{ name: "echo", args: { text: "a" } }],
+            })
+            .mockResolvedValueOnce({
+                content: "收到了",
+                toolCalls: [],
+            });
+
+        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+            toolSchemas,
+            toolGuard: () => ({
+                allow: false as const,
+                message: "无权限：结构化拒绝",
+                errorCode: "POLICY_RUN_AGENT_TEST",
+            }),
+        });
+
+        expect(out).toBe("收到了");
+        const second = vi.mocked(model.chatWithModelWithTools).mock.calls[1][0];
+        expect(JSON.stringify(second)).toContain("无权限：结构化拒绝");
+    });
 });
