@@ -19,8 +19,8 @@ export type ToolRiskLevel = "low" | "medium" | "high";
 export interface RetryPolicy {
     maxRetries: number; // 重试次数（不含首轮）
     backoffMs?: number; // 每次重试前等待
-  }
-  
+}
+
 
 /**
  * 工具执行时的上下文信息
@@ -32,6 +32,7 @@ export interface ToolExecutionContext {
     sessionKey: string;   // 当前会话标识
     agentId: string;      // 执行该工具的智能体实例 ID
     profileId: string;    // 当前操作的用户画像/账号 ID
+    taskId?: string; // 关联任务（含 taskId 的 WebChat 等）
 }
 
 /**

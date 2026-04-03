@@ -24,15 +24,20 @@ import {
     ToolExecutionService,
     builtinProvider,
     createRuntimeSkillProvider,
-    type ToolDefinition,
 } from "@/tools";
-
 import { ProviderHealth } from "@/tools/providerHealth";
 import { emitTrace } from "@/observability/trace";
-
-
 import { getMcpProvidersForRegistry } from "@/tools/mcpRegistry";
-
+import {
+    appendTimelineNote,
+    appendTimelineToolStep,
+    failTask,
+    getTask,
+    prepareTaskForChatRound,
+    type PrepareTaskForChatResult,
+} from "@/tasks/taskService";
+import { formatTaskContextForModel } from "@/tasks/taskContextPrompt";
+import { interceptHighRiskToolForTask } from "@/tasks/taskApproval";
 /** 
  * 定义出站发送函数的类型签名
  * 不同的渠道（Web/QQ）会传入不同的实现来完成消息回传
@@ -61,181 +66,282 @@ const providerHealth = new ProviderHealth({
     failureThreshold: 3,
     cooldownMs: 30_000,
 });
+
+// 辅助函数：安全地追加时间轴备注
+async function appendTimelineNoteSafe(taskId: string, text: string, meta?: Record<string, unknown>): Promise<void> {
+    try {
+        await appendTimelineNote(taskId, text, meta);
+    } catch (e) {
+        console.error("[tasks] appendTimelineNote failed:", e);
+    }
+}
+
+/** 辅助函数：安全地追加时间轴工具步骤 */
+async function appendTimelineToolStepSafe(taskId: string, input: Parameters<typeof appendTimelineToolStep>[1]): Promise<void> {
+    try {
+        await appendTimelineToolStep(taskId, input);
+    } catch (e) { console.error("[tasks] appendTimelineToolStep failed:", e); }
+}
+
+/** 对话失败：若任务在可失败状态则 failTask，否则忽略 */
+async function failTaskAfterChatError(
+    taskId: string,
+    err: unknown,
+    traceId: string
+): Promise<void> {
+    try {
+        const t = await getTask(taskId);
+        if (!t) return;
+        if (t.status !== "running" && t.status !== "review") return;
+        const msg = err instanceof Error ? err.message : String(err);
+        await failTask(taskId, `chat_error: ${msg}`, {
+            meta: { source: "handleUnifiedChat" },
+            traceId,
+        });
+    } catch (e) {
+        console.error("[tasks] failTaskAfterChatError:", e);
+    }
+}
 /**
  * 统一聊天处理器（核心逻辑管道）
  * 流程：入站 -> 获取会话 -> 读取历史 -> 自动摘要/裁剪 -> 注入技能 -> 调用 Agent -> 存储回复 -> 出站回传
  */
+/**
+ * 统一对话处理器：系统的中枢神经
+ * 处理从任何渠道进来的标准化消息，并驱动 AI 生成回复。
+ */
 export async function handleUnifiedChat(
-    inbound: UnifiedInboundMessage, // 入站消息
-    sendOutbound: OutboundSender // 出站发送函数
+    inbound: UnifiedInboundMessage,
+    sendOutbound: OutboundSender
 ): Promise<void> {
-    // 返回sessionKey和userText
-    const sessionKey = resolveSessionKey(inbound); // 会话键
-    const traceId = crypto.randomUUID(); // 生成本次请求的追踪 ID
+    // --- 1. 基础上下文解析 ---
+    const traceId = crypto.randomUUID(); // 全链路追踪 ID
+    const userSessionKey = resolveSessionKey(inbound); // 用户会话标识
+    /** 提取任务关联ID */
+    const taskId =
+        typeof inbound.taskId === "string" && inbound.taskId.trim() !== ""
+            ? inbound.taskId.trim()
+            : undefined;
+    /** 有 taskId 时转录按任务隔离，避免多任务共用 main 历史 */
+    const sessionKey = (taskId ? `task:${taskId}` : userSessionKey) as SessionKey;
 
-    // 1. 环境上下文解析
-    // 获取执行任务的 Agent ID
+    // 确定由哪个 AI 助手响应，并获取其特定配置
     const agentId = resolveAgentId(inbound);
-    // 获取 Agent 配置
     const agent = getAgentConfig(agentId);
-    // 获取权限配置 ID
+    // 权限画像识别：基于渠道和 Agent 确定当前用户的操作权限
     const profileId = resolveProfileId({ channelId: inbound.channelId, agentId });
-    // 标准化用户输入的文本内容
     const userText = normalizeTextForAgent(agentId, inbound.text);
 
+    // --- 2. 任务状态前置准备 ---
+    let taskPrep: PrepareTaskForChatResult | undefined;
+    if (taskId) {
+        try {
+            // 调用之前定义的函数，将任务推向 running 状态或标记为 notesOnly
+            taskPrep = await prepareTaskForChatRound(taskId);
+        } catch (e) {
+            console.error("[tasks] prepareTaskForChatRound failed:", e);
+            taskPrep = undefined;
+        }
+    }
 
-    const traceBase = {
-        traceId,
-        sessionKey,
-        agentId,
-        channelId: inbound.channelId,
-        profileId,
-    };
+    // 发送链路开始追踪事件
+    const traceBase = { traceId, sessionKey, agentId, channelId: inbound.channelId, profileId };
     await emitTrace(traceBase, "session.start", {
-        meta: { textLength: userText.length },
+        meta: {
+            textLength: userText.length,
+            taskId,
+            taskHooks: taskPrep?.hooksEnabled ?? false,
+            userSessionKey,
+            transcriptSessionKey: sessionKey,
+        },
     });
-    /**
-     * 2. 构造技能运行上下文
-     * 这是“按需加载”的核心。它将决定哪些技能 JSON 会被激活
-     */
-    const skillCtx = {
-        channelId: inbound.channelId,
-        sessionKey,
-        agentId,
-        userText,
-    };
 
-    // 3. 获取会话 ID 并持久化用户输入
+    // --- 3. 记忆与上下文管理 ---
     const sessionId = await getOrCreateSessionId(sessionKey, agentId);
-    const history = await readMessages(sessionId, agentId);
-    await appendMessage(sessionId, "user", userText, agentId);
+    const history = await readMessages(sessionId, agentId); // 从存储层读取历史
+    await appendMessage(sessionId, "user", userText, agentId); // 存入本次用户输入
 
-    // 4. 构造当前完整对话流
-    const fullMessages: ChatMessage[] = [
-        ...history,
-        { role: "user", content: userText },
-    ];
+    const fullMessages: ChatMessage[] = [...history, { role: "user", content: userText }];
 
-    // 5. 上下文长度管理（防止超过大模型 Token 限制）
+    // 上下文压缩逻辑：如果消息太多，将旧消息摘要化，只保留最近的 N 条
     const maxMessages = appConfig.chatContextMaxMessages ?? 30;
     const threshold = appConfig.chatSummarizeThreshold ?? 20;
 
     let messages: ChatMessage[];
     if (fullMessages.length > threshold) {
-        // 如果对话过长，保留最近的 N 条，剩下的部分进行 AI 自动摘要总结
         const recentCount = maxMessages - 1;
         const oldPart = fullMessages.slice(0, -recentCount);
         const recent = fullMessages.slice(-recentCount);
-        const summary = await summarizeMessages(oldPart);
-        messages = [
-            { role: "system", content: `【此前对话摘要】\n${summary}` },
-            ...recent,
-        ];
+        const summary = await summarizeMessages(oldPart); // 调用 LLM 生成摘要
+        messages = [{ role: "system", content: `【此前对话摘要】\n${summary}` }, ...recent];
     } else {
-        // 简单裁剪到最大允许数量
         messages = trimMessagesToContextLimit(fullMessages, { maxMessages });
     }
 
-    // 6. 提示词增强（Skills & System Prompt）
+    // --- 4. 技能与工具装配 ---
     const prefixBlocks: ChatMessage[] = [];
-    // 注入 Agent 基础配置中的 System Prompt
+
     if (agent.systemPromptPrefix) {
         prefixBlocks.push({ role: "system", content: agent.systemPromptPrefix });
     }
 
-
-    // 7. 技能（System Prompt）注入
-
-    // 从 Workspace 动态加载自定义的系统提示词，决定 AI 的身份和能力边界
+    // 根据当前上下文加载动态技能（例如从数据库加载的特定业务逻辑）
+    const skillCtx = {
+        channelId: inbound.channelId,
+        sessionKey: userSessionKey,
+        agentId,
+        userText
+    };
     const loaded = await loadSkillsForContext(skillCtx);
     const { systemPrompts, skills, toolSchemas: skillToolSchemas } = loaded;
-    rebuildRuntimeSkillTools(skills);
+
+    rebuildRuntimeSkillTools(skills); // 热更新技能工具实现
     if (systemPrompts.length > 0) {
         prefixBlocks.push({ role: "system", content: systemPrompts.join("\n\n") });
     }
-
+    if (taskPrep?.record) {
+        prefixBlocks.push({
+            role: "system",
+            content: formatTaskContextForModel(taskPrep.record),
+        });
+    }
     if (prefixBlocks.length) {
         messages = [...prefixBlocks, ...messages];
     }
 
-    // Agent allowlist（模型可见 + 执行都要生效）
-    const allow = getBuiltInToolAllowlistForAgent(agentId);
+    // --- 5. 工具执行服务初始化 ---
+    const allow = getBuiltInToolAllowlistForAgent(agentId); // 获取该 Agent 允许使用的工具白名单
+    const mcpProviders = getMcpProvidersForRegistry(); // 接入 MCP (Model Context Protocol) 外部服务
 
-
-    // 创建 MCP 工具提供者
-    const mcpProviders = getMcpProvidersForRegistry();
-    // 创建工具注册表
     const registry = createRegistryWithProviders([
         ...mcpProviders,
         createRuntimeSkillProvider(filterSchemasByAllowlist(skillToolSchemas, allow)),
         builtinProvider,
     ]);
-    // 创建工具执行服务
+    const toolExecutionCtx = {
+        traceId,
+        channelId: inbound.channelId,
+        sessionKey,
+        agentId,
+        profileId,
+        taskId,
+    };
     const execService = new ToolExecutionService({
-        registry, // 工具注册表
-        health: providerHealth, // 健康状态检查
-        ctx: { // 当前执行的上下文（用户、会话等）
-            traceId, // 追踪 ID
-            channelId: inbound.channelId, // 渠道标识
-            sessionKey, // 会话标识
-            agentId, // 执行任务的 Agent ID
-            profileId, // 权限配置 ID
+        registry,
+        health: providerHealth, // 熔断保护逻辑
+        ctx: toolExecutionCtx,
+        // 【关键安全钩子】：在工具真正执行前拦截并进行权限评估
+        toolGuard: (toolName, args) =>
+            evaluateToolPermission({ channelId: inbound.channelId, sessionKey, agentId, profileId }, toolName, args),
+        onFinished: async (event) => {
+            // 工具执行完后记录详细日志
+            const line = makeToolCallLog({ ...event, traceId, sessionKey, agentId });
+            await appendToolCallLog(line);
+            if (taskId?.trim() && taskPrep?.hooksEnabled) {
+                await appendTimelineToolStepSafe(taskId, {
+                    traceId,
+                    toolName: event.toolName,
+                    ok: event.ok,
+                    durationMs: event.durationMs,
+                    label: event.toolName,
+                    summary: `${event.toolName} — ${event.ok ? "ok" : "失败"} (${event.durationMs}ms)`,
+                    meta: {
+                        agentId,
+                        sessionKey,
+                        channelId: inbound.channelId,
+                        argsSummary: line.argsSummary,
+                        resultSummary: line.resultSummary,
+                        errorCode: event.errorCode,
+                        attempt: event.attempt,
+                        source: event.source,
+                    },
+                });
+            }
         },
-        toolGuard: (toolName, args) => // 工具守卫（拦截器）
-            evaluateToolPermission( // 检查工具权限
-                {
-                    channelId: inbound.channelId, // 渠道标识
-                    sessionKey, // 会话标识
-                    agentId, // 执行任务的 Agent ID
-                    profileId, // 权限配置 ID
-                },
-                toolName, // 工具名称
-                args, // 工具入参
-            ),
-        onFinished: async (event) => { // 工具执行完成后触发
-            const line = makeToolCallLog({
-                traceId, // 追踪 ID
-                sessionKey, // 会话标识
-                agentId, // 执行任务的 Agent ID
-                toolName: event.toolName, // 工具名称
-                args: event.args, // 工具入参
-                result: event.result, // 工具执行结果
-                ok: event.ok, // 工具执行是否成功
-                durationMs: event.durationMs, // 工具执行耗时
-                errorCode: event.errorCode, // 错误码
-            });
-            await appendToolCallLog(line); // 将工具执行日志写入 JSONL 文件
-        },
-        trace: (eventType, patch) => emitTrace(traceBase, eventType as any, patch as any),
+        trace: (eventType, patch) => emitTrace(
+            traceBase,
+            eventType as any,
+            patch as any
+        ),
     });
 
-    // 统一从执行服务拿 schemas，再给 runAgent（定义与执行彻底同源）
     let toolSchemas = await execService.getToolSchemas();
     toolSchemas = filterSchemasByAllowlist(toolSchemas, allow);
 
+    // --- 6. 核心推理循环 (The Run Loop) ---
+    let replyText = "";
+    try {
+        // 调用 Agent 引擎，它会根据 messages 和 toolSchemas 决定是说话还是调工具
+        replyText = await runAgent(messages, getAllTools(), {
+            toolSchemas,
+            executeTool: async (toolName, args) => {
+                const resolved = await registry.resolveByName(toolName, toolExecutionCtx, {
+                    health: providerHealth,
+                });
+                const blocked = await interceptHighRiskToolForTask({
+                    taskId,
+                    toolName,
+                    args,
+                    traceId,
+                    riskLevel: resolved?.definition.riskLevel,
+                });
+                if (blocked) return blocked;
+                return execService.execute(toolName, args);
+            },
+            onModelEvent: (e) => emitTrace(
+                traceBase,
+                e.type,
+                { meta: e }
+            ),
+        });
 
-    // 执行工具
-    const replyText = await runAgent(messages, getAllTools(),
-        {
-            toolSchemas, // 工具元数据
-            executeTool: (toolName, args) => execService.execute(toolName, args), // 执行工具
-            onModelEvent: (e) =>
-                emitTrace(traceBase, e.type, {
-                    meta: { round: e.round, toolCallCount: e.toolCallCount, contentLength: e.contentLength },
-                }),
-        }); // 执行 Agent
+        // --- 7. 响应与任务反馈 ---
+        await appendMessage(sessionId, "assistant", replyText, agentId); // 保存 AI 回复
+        await touchSession(sessionKey, agentId); // 更新活跃时间
 
-    // 5. 结果持久化并更新会话活跃状态
-    await appendMessage(sessionId, "assistant", replyText, agentId);
-    // 更新会话活跃状态
-    await touchSession(sessionKey, agentId);
-    // 6. 将结果通过回调发回给对应的渠道（Web/API等）
-    await sendOutbound({
-        text: replyText,
-        metadata: { traceId, agentId, profileId },
-    });
-    await emitTrace(traceBase, "session.end", {
-        ok: true,
-        meta: { replyLength: replyText.length },
-    });
+        // 将结果发回前端
+        await sendOutbound({
+            text: replyText,
+            metadata: { traceId, agentId, profileId, taskId },
+        });
+
+        // 如果关联了任务，且允许更新，则在时间线上记一笔
+        if (taskId && taskPrep?.hooksEnabled) {
+            await appendTimelineNoteSafe(taskId, "WebChat 轮次完成", {
+                traceId,
+                agentId,
+                channelId: inbound.channelId,
+                replyLength: replyText.length,
+                notesOnly: taskPrep.notesOnly
+            });
+        }
+        await emitTrace(traceBase, "session.end", {
+            ok: true,
+            meta: { replyLength: replyText.length, taskId, userSessionKey, transcriptSessionKey: sessionKey },
+        });
+    } catch (err) {
+        // 错误处理：记录日志并尝试更新任务为失败状态
+        console.error("[handleUnifiedChat] Error:", err);
+        await emitTrace(traceBase, "session.end", {
+            ok: false,
+            meta: {
+                taskId,
+                userSessionKey,
+                transcriptSessionKey: sessionKey,
+                error: err instanceof Error ? err.message : String(err),
+            },
+        });
+        if (taskId && taskPrep?.hooksEnabled) {
+            if (taskPrep.notesOnly) {
+                await appendTimelineNoteSafe(taskId, "WebChat 轮次失败（未更改任务主状态）", {
+                    traceId,
+                    agentId,
+                    error: err instanceof Error ? err.message : String(err),
+                });
+            } else {
+                await failTaskAfterChatError(taskId, err, traceId);
+            }
+        }
+        throw err;
+    }
 }

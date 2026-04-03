@@ -19,6 +19,7 @@ import { sendOneBotMessage } from "@/channels/qq/sendOneBotMessage";
 import type { OneBotMessageEvent } from "@/channels/qq/oneBotTypes";
 import { isBotMentioned } from "@/channels/qq/isBotMentioned";
 import { handleUnifiedChat, DEFAULT_SESSION_KEY } from "./chatProcessing";
+import { registerTaskRoutes } from "./taskRoutes";
 
 /**
  * 创建并配置 Express 服务器的主函数
@@ -152,6 +153,8 @@ export function createServer() {
             });
         }
     });
+    registerTaskRoutes(app);
 
     return app;
 }
+

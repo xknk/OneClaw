@@ -94,5 +94,25 @@ export async function runDoctor(): Promise<void> {
     } else {
         line("ok", "exec 工具已关闭（ONECLAW_EXEC_ENABLED=false）");
     }
+
+    // 7. V4 任务存储目录（ tasks/*.json ）
+    const tasksDir = path.join(appConfig.dataDir, "tasks");
+    try {
+        await fs.mkdir(tasksDir, { recursive: true });
+        const testFile = path.join(tasksDir, ".oneclaw_write_test");
+        await fs.writeFile(testFile, "");
+        await fs.unlink(testFile);
+        line("ok", `任务目录可写: ${tasksDir}`);
+    } catch {
+        line("fail", "任务目录不可写或无法创建", `检查权限: ${tasksDir}`);
+    }
+
+    // 8. 任务高风险审批开关（提示）
+    if (appConfig.taskHighRiskApprovalEnabled) {
+        line("ok", "V4 已启用任务高风险工具审批（ONECLAW_TASK_HIGH_RISK_APPROVAL，关联 taskId 时对 riskLevel=high 及 exec/apply_patch 拦截）");
+    } else {
+        line("warn", "任务高风险审批已关闭", "生产环境建议 ONECLAW_TASK_HIGH_RISK_APPROVAL=true");
+    }
+
     console.log("\n[OneClaw] 自检结束。");
 }

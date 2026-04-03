@@ -40,6 +40,11 @@ export interface UnifiedInboundMessage {
     * 系统可以根据该字段分发任务，与 agentId 通常是对应关系 
     */
     intent?: string;
+    /** 
+  * 任务关联 ID：
+  * 用于 V4 版本的工作流追踪。若存在，AI 的响应会记录到该任务的生命周期中。
+  */
+    taskId?: string;
 }
 
 /**
@@ -75,6 +80,7 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
         sessionKey?: unknown; // 会话键
         agentId?: unknown; // 执行任务的 Agent ID   
         intent?: unknown; // 用户意图
+        taskId?: unknown; //任务关联ID
     };
 
     // 2. 核心字段校验：消息内容必须是字符串
@@ -104,9 +110,13 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
             anyBody.intent === "code_review"
             ? anyBody.intent
             : undefined;
-
-
-    // 6. 组装并返回标准结构
+    // 5. 提取任务关联ID
+    const taskId =
+        typeof anyBody.taskId === "string" && anyBody.taskId.trim() !== ""
+            ? anyBody.taskId.trim()
+            : undefined;
+            
+    // 7. 组装并返回标准结构
     return {
         channelId: "webchat",
         channelUserId: "webchat-local", // 对于简单的 Web 聊天，可使用固定 ID
@@ -115,5 +125,6 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
         timestamp: new Date().toISOString(),
         agentId,
         intent,
+        taskId,
     };
 }

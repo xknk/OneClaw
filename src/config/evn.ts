@@ -83,6 +83,8 @@ export const appConfig = {
     dailyReportScheduleHour: Math.min(23, Math.max(0, num("ONECLAW_DAILY_REPORT_SCHEDULE_HOUR", 18))),
     /** 本地分钟 0–59，默认 0 */
     dailyReportScheduleMinute: Math.min(59, Math.max(0, num("ONECLAW_DAILY_REPORT_SCHEDULE_MINUTE", 0))),
+    /** V4 M3：带 taskId 的任务是否对 exec/apply_patch 强制待审批 */
+    taskHighRiskApprovalEnabled: bool("ONECLAW_TASK_HIGH_RISK_APPROVAL", true),
 } as const;
 
 export const PORT = num("PORT", 3000);
