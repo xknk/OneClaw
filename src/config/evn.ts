@@ -85,6 +85,10 @@ export const appConfig = {
     dailyReportScheduleMinute: Math.min(59, Math.max(0, num("ONECLAW_DAILY_REPORT_SCHEDULE_MINUTE", 0))),
     /** V4 M3：带 taskId 的任务是否对 exec/apply_patch 强制待审批 */
     taskHighRiskApprovalEnabled: bool("ONECLAW_TASK_HIGH_RISK_APPROVAL", true),
+        /**
+     * MCP：单次 listTools（含 connect）最大等待毫秒；超时视为该 MCP 不可用，上层跳过工具列表。
+     */
+    mcpListToolsTimeoutMs: num("ONECLAW_MCP_LIST_TOOLS_TIMEOUT_MS", 10_000),
 } as const;
 
 export const PORT = num("PORT", 3000);

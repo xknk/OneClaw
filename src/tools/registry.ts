@@ -57,10 +57,19 @@ export class ToolRegistry {
         for (const provider of this.providers) {
             // 检查 Provider 的健康状态, 如果 Provider 处于熔断状态，则跳过
             if (opts?.health?.isOpen(provider.id)) continue;
+            let defs: ToolDefinition[];
 
             // 询问该 Provider：基于当前用户上下文，你有哪些工具可用？
-            const defs = await provider.listDefinitions(ctx);
-
+            try {
+                defs = await provider.listDefinitions(ctx);
+            }
+            catch (err) {
+                console.error(
+                    `[oneclaw] provider ${provider.id} listDefinitions 失败，已跳过:`,
+                    err instanceof Error ? err.message : String(err)
+                );
+                continue;
+            }
             for (const def of defs) {
                 /**
                  * 冲突解决逻辑：

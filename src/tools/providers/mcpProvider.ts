@@ -53,9 +53,9 @@ export function createMcpProvider(opts: McpProviderOptions): ToolProvider {
          * 将 MCP 的工具格式转换为框架通用的 ToolDefinition 格式
          */
         async listDefinitions(_ctx: ToolExecutionContext): Promise<ToolDefinition[]> {
-            const tools = await opts.client.listTools(opts.server);
-
-            return tools
+            try {
+                const tools = await opts.client.listTools(opts.server);
+                return tools
                 .filter((t) => allow.size === 0 || allow.has(t.name)) // 过滤掉不在白名单中的工具
                 .map((t) => ({
                     name: t.name,
@@ -73,6 +73,15 @@ export function createMcpProvider(opts: McpProviderOptions): ToolProvider {
                     version: "1",
                     owner: `mcp:${opts.server}`,
                 }));
+            } catch (err) {
+                console.error(
+                    `[oneclaw] MCP listTools 失败，已跳过服务 ${opts.server}:`,
+                    err instanceof Error ? err.message : String(err)
+                );
+                return [];
+            }
+
+            
         },
 
         /**

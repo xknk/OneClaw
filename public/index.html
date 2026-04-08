@@ -81,6 +81,17 @@
 </head>
 
 <body>
+    <nav style="margin-bottom:0.75rem;font-size:0.9rem;">
+        <a id="navFailed" href="/tasks-failed.html">失败任务列表</a>
+    </nav>
+    <script>
+        (function () {
+            var p = new URLSearchParams(location.search);
+            var tok = p.get("token");
+            var a = document.getElementById("navFailed");
+            if (a && tok) a.href = "/tasks-failed.html?token=" + encodeURIComponent(tok);
+        })();
+    </script>
     <h1>OneClaw WebChat</h1>
     <div id="messages"></div>
     <div id="inputRow">

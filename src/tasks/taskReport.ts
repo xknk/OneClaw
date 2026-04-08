@@ -4,6 +4,7 @@
  */
 import {
     META_LAST_APPROVAL_KEY,
+    META_LAST_FAILURE_CONTEXT_KEY,
     META_PENDING_APPROVAL_KEY,
     META_PLAN_KEY,
     META_LAST_REVIEW_KEY,
@@ -74,6 +75,25 @@ export function renderTaskReportMarkdown(task: TaskRecord): string {
     if (task.checkpoint) {
         const c = task.checkpoint;
         lines.push(`- **检查点:** stepIndex=${c.stepIndex}${c.label ? `, ${c.label}` : ""}, at=${c.at}`);
+    }
+    const failCtx = task.meta?.[META_LAST_FAILURE_CONTEXT_KEY];
+    // 渲染失败排障上下文
+    if (failCtx && typeof failCtx === "object" && !Array.isArray(failCtx)) {
+        const o = failCtx as Record<string, unknown>;
+        lines.push("");
+        lines.push(`## 失败排障上下文 \`${META_LAST_FAILURE_CONTEXT_KEY}\``);
+        if (typeof o.traceId === "string" && o.traceId.trim()) {
+            lines.push(`- **traceId:** \`${o.traceId}\`（CLI: \`oneclaw trace get --id <traceId>\`）`);
+        }
+        if (typeof o.lastToolStepIndex === "number") {
+            lines.push(`- **最后工具步骤序号（timeline step）:** ${o.lastToolStepIndex}`);
+        }
+        if (typeof o.source === "string") lines.push(`- **来源:** ${o.source}`);
+        if (typeof o.at === "string") lines.push(`- **记录时间:** ${o.at}`);
+        if (typeof o.errorBrief === "string") lines.push(`- **简述:** ${o.errorBrief}`);
+        lines.push("");
+        lines.push(mdCodeLang("json", JSON.stringify(failCtx, null, 2)));
+        lines.push("");
     }
     lines.push(`- **报告生成时间:** ${exportedAt}`);
     lines.push("");

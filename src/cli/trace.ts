@@ -139,68 +139,6 @@ export function registerTraceCommands(program: Command): void {
             console.log(JSON.stringify(rows, null, 2));
         });
 
-    /**
-     * 子命令：trace replay
-     * 用途：按 traceId 输出可读时间线摘要（不重放执行）
-     */
-    trace
-        .command("replay")
-        .description("按 traceId 输出可读时间线摘要（不重放执行）")
-        .requiredOption("--id <traceId>", "traceId")
-        .option("--days <n>", "扫描最近 N 天", "14")
-        .action(async (opts: { id: string; days: string }) => {
-            const days = Math.max(1, Math.min(90, Number(opts.days) || 14));
-            const events = await findEventsByTraceId(opts.id.trim(), days);
-
-            if (!events.length) {
-                console.error("未找到该 traceId");
-                process.exitCode = 1;
-                return;
-            }
-
-            const first = events[0];
-            const last = events[events.length - 1];
-            const totalMs =
-                new Date(last.timestamp).getTime() - new Date(first.timestamp).getTime();
-
-            const llmReq = events.filter((e) => e.eventType === "llm.request").length;
-            const llmResp = events.filter((e) => e.eventType === "llm.response").length;
-            const toolResolve = events.filter((e) => e.eventType === "tool.resolve").length;
-            const toolEnd = events.filter((e) => e.eventType === "tool.execute.end").length;
-            const failed = events.filter(
-                (e) =>
-                    e.eventType === "tool.failed" ||
-                    e.eventType === "tool.denied" ||
-                    e.eventType === "tool.validation.failed" ||
-                    (e.eventType === "tool.execute.end" && e.ok === false)
-            ).length;
-
-            const header = [
-                `traceId: ${opts.id.trim()}`,
-                `timeRange: ${first.timestamp} -> ${last.timestamp}`,
-                `durationMs: ${totalMs}`,
-                `sessionKey: ${first.sessionKey ?? "-"}`,
-                `agentId: ${first.agentId ?? "-"}`,
-                `channelId: ${first.channelId ?? "-"}`,
-                `profileId: ${first.profileId ?? "-"}`,
-                `events: ${events.length}, llm.request=${llmReq}, llm.response=${llmResp}, tool.resolve=${toolResolve}, tool.execute.end=${toolEnd}, failed=${failed}`,
-                "",
-                "Timeline:",
-            ];
-
-            const lines = events.map((e) => {
-                const base = `[${e.timestamp}] ${e.eventType}`;
-                const tool = e.toolName ? ` tool=${e.toolName}` : "";
-                const src = e.toolSource ? ` source=${e.toolSource}` : "";
-                const ok = typeof e.ok === "boolean" ? ` ok=${e.ok}` : "";
-                const dur = typeof e.durationMs === "number" ? ` durationMs=${e.durationMs}` : "";
-                const code = e.errorCode ? ` errorCode=${e.errorCode}` : "";
-                const attempt = typeof e.attempt === "number" ? ` attempt=${e.attempt}` : "";
-                return `${base}${tool}${src}${ok}${dur}${code}${attempt}`;
-            });
-
-            console.log([...header, ...lines].join("\n"));
-        });
 
     /**
      * 子命令：trace replay

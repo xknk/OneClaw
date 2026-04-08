@@ -1,3 +1,4 @@
+import { appConfig } from "@/config/evn";
 import type { McpClient, McpToolDescriptor } from "./providers/mcpProvider";
 import type { McpServerConfig } from "@/config/mcpConfig";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -85,15 +86,31 @@ export class RoutingMcpSdkClient implements McpClient {
      * 获取指定服务器支持的所有工具列表
      */
     async listTools(server: string): Promise<McpToolDescriptor[]> {
-        return this.withClient(server, async (client) => {
-            const r = await client.listTools();
-            return r.tools.map((t) => ({
-                name: t.name,
-                description: t.description,
-                // 将 MCP 的 inputSchema 转换为 Agent 可读的格式
-                parameters: (t.inputSchema as Record<string, unknown> | undefined) ?? { type: "object" },
+        const ms = Math.max(1000, appConfig.mcpListToolsTimeoutMs); // 10秒
+
+        const work = this.withClient(server, async (client) => {
+            const r = await client.listTools(); // 获取工具列表
+            return r.tools.map((t) => ({ // 转换为工具描述对象
+                name: t.name, // 工具名
+                description: t.description, // 工具描述
+                parameters: (t.inputSchema as Record<string, unknown> | undefined) ?? { type: "object" }, // 工具参数
             }));
         });
+        // 设置超时时间
+        const deadline = new Promise<never>((_, reject) => {
+            setTimeout(() => {
+                console.error(`MCP listTools 超时（>${ms}ms，server=${server}）`);
+                reject(new Error(`MCP listTools 超时（>${ms}ms，server=${server}）`));
+            }, ms);
+        });
+        console.log(work, deadline);
+        // 竞争获取结果
+        try {
+            return await Promise.race([work, deadline]);
+        } catch (e) {
+            this.clients.delete(server);
+            throw e;
+        }
     }
 
     /**

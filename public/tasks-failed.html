@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>失败任务 · OneClaw</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+        h1 { font-size: 1.25rem; margin-top: 0; }
+        nav { margin-bottom: 1rem; }
+        nav a { color: #0066cc; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 0.5rem 0.4rem;
+            text-align: left;
+            vertical-align: top;
+        }
+        th { background: #f0f0f0; }
+        .muted { color: #666; }
+        .error { color: #c00; margin: 0.5rem 0; }
+        #reload {
+            padding: 0.4rem 0.8rem;
+            margin-bottom: 0.75rem;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <nav>
+        <a href="/">← WebChat</a>
+        <span class="muted"> · </span>
+        <a id="linkChatWithToken" href="/">带 token 返回聊天</a>
+    </nav>
+    <h1>仅失败任务</h1>
+    <p class="muted">数据来源：<code>GET /api/tasks?failedOnly=true&amp;limit=50</code></p>
+    <button type="button" id="reload">刷新</button>
+    <div id="err" class="error" style="display:none;"></div>
+    <table>
+        <thead>
+            <tr>
+                <th>taskId</th>
+                <th>标题</th>
+                <th>失败原因</th>
+                <th>更新时间</th>
+            </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+    </table>
+
+    <script>
+        const tbody = document.getElementById("tbody");
+        const errEl = document.getElementById("err");
+        const DEFAULT_TOKEN = "oneclaw-dev-token";
+        const urlParams = new URLSearchParams(location.search);
+        const token = urlParams.get("token") || DEFAULT_TOKEN;
+
+        const linkChat = document.getElementById("linkChatWithToken");
+        linkChat.href = token ? "/?token=" + encodeURIComponent(token) : "/";
+
+        function authHeaders() {
+            const headers = {};
+            if (token) headers["Authorization"] = "Bearer " + token;
+            return headers;
+        }
+
+        function showErr(msg) {
+            errEl.style.display = msg ? "block" : "none";
+            errEl.textContent = msg || "";
+        }
+
+        function fmtTime(iso) {
+            if (!iso) return "—";
+            try {
+                return new Date(iso).toLocaleString();
+            } catch {
+                return String(iso);
+            }
+        }
+
+        async function load() {
+            showErr("");
+            tbody.innerHTML = "";
+            try {
+                const res = await fetch("/api/tasks?failedOnly=true&limit=50", {
+                    headers: authHeaders(),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    showErr(data.error || ("HTTP " + res.status));
+                    return;
+                }
+                const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+                if (tasks.length === 0) {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = '<td colspan="4" class="muted">暂无失败任务</td>';
+                    tbody.appendChild(tr);
+                    return;
+                }
+                for (const t of tasks) {
+                    const tr = document.createElement("tr");
+                    const id = document.createElement("td");
+                    id.textContent = t.taskId ?? "—";
+                    const title = document.createElement("td");
+                    title.textContent = t.title ?? "—";
+                    const fr = document.createElement("td");
+                    fr.textContent = t.failureReason != null && String(t.failureReason).trim() !== ""
+                        ? String(t.failureReason)
+                        : "—";
+                    const up = document.createElement("td");
+                    up.textContent = fmtTime(t.updatedAt);
+                    tr.appendChild(id);
+                    tr.appendChild(title);
+                    tr.appendChild(fr);
+                    tr.appendChild(up);
+                    tbody.appendChild(tr);
+                }
+            } catch (e) {
+                showErr("网络错误: " + (e && e.message ? e.message : String(e)));
+            }
+        }
+
+        document.getElementById("reload").addEventListener("click", load);
+        load();
+    </script>
+</body>
+
+</html>
