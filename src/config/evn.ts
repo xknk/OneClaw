@@ -89,6 +89,9 @@ export const appConfig = {
      * MCP：单次 listTools（含 connect）最大等待毫秒；超时视为该 MCP 不可用，上层跳过工具列表。
      */
     mcpListToolsTimeoutMs: num("ONECLAW_MCP_LIST_TOOLS_TIMEOUT_MS", 10_000),
+    /** V4 M2：是否启用步骤工具白名单强制执行 */
+    m2StepToolEnforcement: bool("ONECLAW_M2_STEP_TOOL_ENFORCEMENT", true),
+
 } as const;
 
 export const PORT = num("PORT", 3000);

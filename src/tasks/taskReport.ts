@@ -26,10 +26,18 @@ function timelineLine(e: TaskTimelineEntry): string {
     }
     // 处理备注信息
     if (e.kind === "note") {
+        if (e.text === "tool_denied" && e.meta) {
+            const m = e.meta as Record<string, unknown>;
+            const code = typeof m.code === "string" ? m.code : "UNKNOWN";
+            const tool = typeof m.toolName === "string" ? m.toolName : "-";
+            const step = typeof m.stepIndex === "number" ? String(m.stepIndex) : "-";
+            const trace = typeof m.traceId === "string" ? m.traceId : "-";
+            return `- [${e.at}] 工具拒绝 tool=${tool} step=${step} code=${code} trace=${trace}`;
+        }
         return `- [${e.at}] 备注: ${e.text}`;
     }
     // 处理步骤执行记录（包含成功/失败图标）
-    const ok = e.ok === false ? " ❌" : " ✅"; 
+    const ok = e.ok === false ? " ❌" : " ✅";
     const lbl = e.label ? ` ${e.label}` : "";
     const sum = e.summary ? ` — ${e.summary}` : "";
     return `- [${e.at}] 步骤 ${e.stepIndex}${lbl}${sum}${ok}`;
@@ -69,7 +77,7 @@ export function renderTaskReportMarkdown(task: TaskRecord): string {
     if (task.templateId) lines.push(`- **模板:** \`${task.templateId}\``);
     lines.push(`- **创建时间:** ${task.createdAt}`);
     lines.push(`- **最后更新:** ${task.updatedAt}`);
-    
+
     // 2. 异常情况记录
     if (task.failureReason) lines.push(`- **失败原因:** ${task.failureReason}`);
     if (task.checkpoint) {

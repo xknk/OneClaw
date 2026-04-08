@@ -38,6 +38,8 @@ import {
 } from "@/tasks/taskService";
 import { formatTaskContextForModel } from "@/tasks/taskContextPrompt";
 import { interceptHighRiskToolForTask } from "@/tasks/taskApproval";
+import { ToolPolicyGuard, ToolPolicyError } from "@/tasks/stepToolPolicy";
+import { getTaskPlanFromRecord } from "@/tasks/collaborationService";
 /** 
  * 定义出站发送函数的类型签名
  * 不同的渠道（Web/QQ）会传入不同的实现来完成消息回传
@@ -83,6 +85,16 @@ async function appendTimelineToolStepSafe(taskId: string, input: Parameters<type
     } catch (e) { console.error("[tasks] appendTimelineToolStep failed:", e); }
 }
 
+// 获取正在运行的计划步骤
+async function getRunningPlanStep(taskId?: string) {
+    if (!taskId) return null;
+    const rec = await getTask(taskId);
+    if (!rec) return null;
+    const plan = getTaskPlanFromRecord(rec);
+    if (!plan?.steps?.length) return null;
+    return plan.steps.find((s) => s.status === "running") ?? null;
+}
+
 /** 对话失败：若任务在可失败状态则 failTask，否则忽略 */
 async function failTaskAfterChatError(
     taskId: string,
@@ -90,11 +102,13 @@ async function failTaskAfterChatError(
     traceId: string
 ): Promise<void> {
     try {
-        const t = await getTask(taskId);
-        if (!t) return;
-        if (t.status !== "running" && t.status !== "review") return;
         const msg = err instanceof Error ? err.message : String(err);
-        await failTask(taskId, `chat_error: ${msg}`, {
+        const reason =
+            err instanceof ToolPolicyError
+                ? `policy_denied:${err.code}:${msg}`
+                : `chat_error:${msg}`;
+
+        await failTask(taskId, reason, {
             meta: { source: "handleUnifiedChat" },
             traceId,
         });
@@ -278,6 +292,39 @@ export async function handleUnifiedChat(
                 const resolved = await registry.resolveByName(toolName, toolExecutionCtx, {
                     health: providerHealth,
                 });
+                if (taskId && appConfig.m2StepToolEnforcement) {
+                    const runningStep = await getRunningPlanStep(taskId);
+
+                    // fail-closed：没有 running step 直接拒绝
+                    if (!runningStep) {
+                        const err = new ToolPolicyError(
+                            "STEP_INVALID",
+                            "策略拒绝：当前任务无 running 步骤，禁止工具调用",
+                            { toolName }
+                        );
+                        await appendTimelineNoteSafe(taskId, "tool_denied", {
+                            traceId,
+                            toolName,
+                            code: err.code,
+                            stepIndex: err.stepIndex,
+                        });
+                        throw err;
+                    }
+
+                    try {
+                        ToolPolicyGuard.assertToolAccess(runningStep, toolName);
+                    } catch (e) {
+                        if (e instanceof ToolPolicyError) {
+                            await appendTimelineNoteSafe(taskId, "tool_denied", {
+                                traceId,
+                                toolName,
+                                code: e.code,
+                                stepIndex: e.stepIndex,
+                            });
+                        }
+                        throw e;
+                    }
+                }
                 const blocked = await interceptHighRiskToolForTask({
                     taskId,
                     toolName,

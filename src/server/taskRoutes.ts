@@ -19,6 +19,8 @@ import {
 import { approvePendingTask } from "@/tasks/taskApproval";
 import { listTaskTemplateSummaries } from "@/tasks/templates";
 import { buildTaskReportJson, parseExportFormat, renderTaskReportMarkdown } from "@/tasks/taskReport";
+import { TaskValidationError } from "@/tasks/templateValidation";
+import { runTask } from "@/tasks/taskRunner";
 export function registerTaskRoutes(app: express.Application): void {
     /**
      * 创建任务接口
@@ -40,6 +42,10 @@ export function registerTaskRoutes(app: express.Application): void {
             });
             res.status(201).json(rec);
         } catch (err) {
+            if (err instanceof TaskValidationError) {
+                res.status(400).json({ error: err.message });
+                return;
+            }
             console.error("/api/tasks POST:", redactForLog(err));
             res.status(500).json({
                 error: err instanceof Error ? err.message : "服务器内部错误",
@@ -329,6 +335,19 @@ export function registerTaskRoutes(app: express.Application): void {
             res.status(500).json({
                 error: err instanceof Error ? err.message : "服务器内部错误",
             });
+        }
+    });
+    app.post("/api/tasks/:taskId/run", async (req, res) => {
+        try {
+            const body = req.body ?? {};
+            const traceId = typeof body.traceId === "string" ? body.traceId : undefined;
+            const rec = await runTask(req.params.taskId, traceId);
+            res.json(rec);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : "服务器内部错误";
+            const code = msg.includes("不存在") ? 404 : msg.includes("v4_plan") ? 400 : 500;
+            if (code === 500) console.error("/api/tasks run:", redactForLog(err));
+            res.status(code).json({ error: msg });
         }
     });
 }

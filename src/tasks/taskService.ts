@@ -13,6 +13,9 @@ import {
     META_LAST_FAILURE_CONTEXT_KEY,
     type TaskLastFailureContext,
 } from "./collaborationTypes";
+import { getTaskPlanFromRecord } from "./collaborationService";
+import { validateMergedTemplateParams } from "./templateValidation";
+import { runTaskPlan, resumeTaskFromCheckpoint } from "./taskRunner";
 
 /** 内部工具：获取当前时间的 ISO 字符串 */
 function nowIso(): string {
@@ -25,6 +28,7 @@ function nowIso(): string {
  */
 export async function createTask(input: CreateTaskInput = {}): Promise<TaskRecord> {
     const merged = mergeCreateInputWithTemplate(input);
+    validateMergedTemplateParams(merged);
 
     const at = nowIso();
     const taskId = newTaskId();
@@ -40,7 +44,7 @@ export async function createTask(input: CreateTaskInput = {}): Promise<TaskRecor
             {
                 kind: "note",
                 at,
-                text:merged.templateId ? `任务已创建（模板：${merged.templateId}）` : "任务已创建",
+                text: merged.templateId ? `任务已创建（模板：${merged.templateId}）` : "任务已创建",
                 meta: {},
             },
         ],
@@ -84,7 +88,7 @@ export async function transitionTask(
             : undefined,
         timelineNote: input.timelineNote,
     });
-    
+
     await writeTask(next);
     return next;
 }
@@ -119,7 +123,7 @@ export async function failTask(
     const lastToolStepIndex =
         lastTool?.kind === "step" ? lastTool.stepIndex : undefined;
     // 3. 获取当前时间戳
-    const at = nowIso();    
+    const at = nowIso();
     // 4. 获取调用方标识
     const src =
         opts.meta && typeof opts.meta.source === "string"
@@ -151,10 +155,17 @@ export async function retryTask(taskId: string, reason?: string): Promise<TaskRe
     if (cur.status !== "failed") {
         throw new Error("仅失败态任务可重试（failed -> running）");
     }
-    return transitionTask(taskId, {
+    // 1. 状态迁移
+    const moved = await transitionTask(taskId, {
         to: "running",
         reason: reason ?? "retry",
         timelineNote: reason ? `重试：${reason}` : "重试执行",
+    });
+    // 仅当存在有效 v4_plan 时才进入 Runner；无计划时保持兼容（仅切回 running）
+    const plan = getTaskPlanFromRecord(moved);
+    if (!plan?.steps?.length) return moved;
+    return runTaskPlan(moved.taskId, {
+        traceId: `retry_${Date.now()}`,
     });
 }
 
@@ -171,11 +182,17 @@ export async function resumeFromCheckpoint(
     if (cur.status !== "failed") {
         throw new Error("仅失败任务建议从检查点恢复为 running");
     }
-    return transitionTask(taskId, {
+    const moved = await transitionTask(taskId, {
         to: "running",
         reason: "resume_from_checkpoint",
         checkpoint,
         timelineNote: `从步骤 ${checkpoint.stepIndex} 恢复`,
+    });
+    const plan = getTaskPlanFromRecord(moved);
+    if (!plan?.steps?.length) return moved;
+    return resumeTaskFromCheckpoint(moved.taskId, {
+        stepIndex: checkpoint.stepIndex,
+        traceId: `resume_${Date.now()}`,
     });
 }
 
@@ -254,7 +271,7 @@ export function parseTaskStatus(raw: string | undefined): TaskStatus | undefined
     if (!raw || !raw.trim()) return undefined;
     const s = raw.trim() as TaskStatus;
     const all: TaskStatus[] = [
-        "draft", "planned", "running", "pending_approval", 
+        "draft", "planned", "running", "pending_approval",
         "review", "approved", "rejected", "done", "failed", "cancelled",
     ];
     return all.includes(s) ? s : undefined;

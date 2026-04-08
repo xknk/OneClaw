@@ -11,6 +11,7 @@ import { setTaskPlan, submitReviewVerdict } from "@/tasks/collaborationService";
 import { listTaskTemplateSummaries } from "@/tasks/templates";
 import { approvePendingTask } from "@/tasks/taskApproval";
 import { buildTaskReportJson, renderTaskReportMarkdown, parseExportFormat } from "@/tasks/taskReport";
+import { runTask } from "@/tasks/taskRunner";
 /**
  * 注册任务相关的命令行指令
  * @param program Commander 的主程序实例
@@ -185,7 +186,7 @@ export function registerTaskCommands(program: Command): void {
                 process.exitCode = 1;
             }
         });
-        
+
 
     task
         .command("export")
@@ -213,6 +214,21 @@ export function registerTaskCommands(program: Command): void {
                 await fs.writeFile(opts.out.trim(), body, "utf-8");
             } else {
                 console.log(body);
+            }
+        });
+
+    task
+        .command("run")
+        .description("按 v4_plan 连续执行任务（Runner）")
+        .requiredOption("--id <taskId>", "taskId")
+        .option("--trace-id <traceId>", "可选 traceId")
+        .action(async (opts: { id: string; traceId?: string }) => {
+            try {
+                const rec = await runTask(opts.id.trim(), opts.traceId);
+                console.log(JSON.stringify(rec, null, 2));
+            } catch (e) {
+                console.error(e instanceof Error ? e.message : e);
+                process.exitCode = 1;
             }
         });
 }
