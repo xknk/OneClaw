@@ -72,7 +72,7 @@
 
 ### 6. 关联文档
 
-- V3 执行版：`docs/specs/prd-v3.md`
-- V4 规划：`docs/specs/prd-v4.md`
-- V5 规划：`docs/specs/prd-v5.md`
+- V3 执行版：[`prd-v3.md`](./prd-v3.md)
+- V4 规划：[`prd-v4.md`](./prd-v4.md)
+- V5 规划：[`prd-v5.md`](./prd-v5.md)
 

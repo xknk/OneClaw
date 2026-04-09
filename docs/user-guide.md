@@ -1,5 +1,7 @@
 # OneClaw 使用说明（简要）
 
+文档索引（步骤 1–4）见 [README](./README.md)。
+
 ## 安装与启动
 
 1. 安装依赖：`pnpm install`

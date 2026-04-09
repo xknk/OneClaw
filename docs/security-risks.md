@@ -1,5 +1,7 @@
 # OneClaw 安全配置与风险说明
 
+文档索引见 [README](./README.md)。
+
 ## 权限模型（概要）
 
 - **Profile**（如 `webchat_default`、`readonly`、`qq_group`）控制读/写/执行及路径、命令策略。
