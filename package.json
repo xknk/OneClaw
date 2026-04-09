@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "oneclaw": "bin/oneclaw.cjs"
+  },
   "scripts": {
     "dev": "tsx src/server/index.ts",
     "start": "node dist/server/index.js",
@@ -16,18 +19,27 @@
     "test:watch": "vitest",
     "smoke": "tsx scripts/smoke-server.ts",
     "ci": "pnpm run typecheck && pnpm run test && pnpm run smoke",
-    "trace": "tsx src/cli.ts trace"
+    "trace": "tsx src/cli.ts trace",
+    "repl": "tsx src/cli.ts repl",
+    "tui": "tsx src/cli.ts tui",
+    "oneclaw": "node bin/oneclaw.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "commander": "^12.0.0",
     "dotenv": "^17.3.1",
     "express": "^4.19.2",
+    "ink": "5",
+    "ink-text-input": "6",
+    "react": "18",
+    "ws": "^8.20.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.2",
+    "@types/react": "^19.2.14",
+    "@types/ws": "^8.18.1",
     "tsc-alias": "^1.8.16",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0",

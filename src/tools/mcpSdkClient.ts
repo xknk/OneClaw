@@ -1,4 +1,5 @@
 import { appConfig } from "@/config/evn";
+import { logErrorUnlessTui } from "@/infra/tuiLog";
 import type { McpClient, McpToolDescriptor } from "./providers/mcpProvider";
 import type { McpServerConfig } from "@/config/mcpConfig";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -99,11 +100,10 @@ export class RoutingMcpSdkClient implements McpClient {
         // 设置超时时间
         const deadline = new Promise<never>((_, reject) => {
             setTimeout(() => {
-                console.error(`MCP listTools 超时（>${ms}ms，server=${server}）`);
+                logErrorUnlessTui(`MCP listTools 超时（>${ms}ms，server=${server}）`);
                 reject(new Error(`MCP listTools 超时（>${ms}ms，server=${server}）`));
             }, ms);
         });
-        console.log(work, deadline);
         // 竞争获取结果
         try {
             return await Promise.race([work, deadline]);

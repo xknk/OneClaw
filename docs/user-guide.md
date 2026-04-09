@@ -9,6 +9,46 @@
 3. 启动网关：`pnpm dev` 或 `pnpm cli start`
 4. 自检：`pnpm cli doctor`
 
+## 终端对话（REPL）
+
+**无需**启动 `pnpm dev`。在配置好 `.env`（模型等）后，直接在本机终端多轮对话，处理链与 WebChat 的 `POST /api/chat` 相同（`handleUnifiedChat`）。
+
+```bash
+pnpm repl                    # 同 pnpm cli repl
+pnpm cli repl
+pnpm cli repl --session cli  # 默认即为 cli，可与浏览器 main 区分
+pnpm cli repl --agent <id> --task <taskId>
+pnpm cli repl -v             # stderr 打印 traceId / metadata，便于 pnpm cli trace get
+```
+
+运行中：直接输入 `/help`、`/session <key>`、`/clear`、`/status`；单独输入 `/` 回车可列出命令；**行首输入 `/` 后按 Tab** 可补全命令。`/exit` 或 `/quit` 退出。
+
+**注意**：若同时开网关与 REPL，勿让两边共用同一 `sessionKey` 写转录（建议 Web 用 `main`，REPL 用 `cli`）。详见 [终端交互-实施方案](./终端交互-实施方案.md) §5。
+
+### TUI（类 OpenClaw 分栏终端）
+
+需 **真实 TTY**（把终端窗口拉高一些）。本进程内会起 **WebSocket**（默认 `18789`，可用 `ONECLAW_TUI_WS_PORT` 或 `-p`），再用 **Ink** 画顶栏、消息区、输入行与底栏。
+
+```bash
+pnpm cli                    # 无子命令时默认进入 TUI（与下面等价）
+pnpm oneclaw                # 同全局 oneclaw（走 bin/oneclaw.cjs，不依赖 PATH）
+pnpm tui                    # 同 pnpm cli tui
+pnpm cli tui --session cli
+pnpm cli tui -p 18790       # 端口占用时换端口
+```
+
+**全局一条命令（类似 `claude`）**：在仓库根执行 `pnpm link --global` 后，终端里可直接运行 `oneclaw`（无参即 TUI），或 `oneclaw repl`、`oneclaw doctor` 等。入口脚本为 `bin/oneclaw.cjs`，依赖本仓库已 `pnpm install`。
+
+**Windows 上提示「无法将 oneclaw 识别为 cmdlet」时**：说明当前 shell 的 PATH 里还没有 pnpm 的全局可执行目录。任选其一即可：
+
+1. **不链全局（推荐先试）**：在仓库根用 `pnpm oneclaw` 或 `pnpm cli`（无子命令即 TUI）。
+2. **链全局并修好 PATH**：在项目外执行一次 `pnpm setup`（会把 `PNPM_HOME` 写入用户环境变量），**关闭并重新打开**终端，再在仓库根执行 `pnpm link --global`，然后再试 `oneclaw`。
+3. **临时调用**：`node 仓库根路径\bin\oneclaw.cjs`（无参即 TUI）。
+
+对话链与 `repl` 相同（`handleUnifiedChat`）。**Ctrl+C** 退出。
+
+与 OpenClaw / Claude Code 终端能力的对照与缺口，见 [参考-终端产品能力对照](./参考-终端产品能力对照.md)。
+
 ## 目录与数据
 
 - `ONECLAW_DATA_DIR`：数据根目录（默认 `~/.oneclaw`）

@@ -1,3 +1,4 @@
+import { logErrorUnlessTui } from "@/infra/tuiLog";
 import type {
     ToolDefinition,
     ToolExecutionContext,
@@ -74,7 +75,7 @@ export function createMcpProvider(opts: McpProviderOptions): ToolProvider {
                     owner: `mcp:${opts.server}`,
                 }));
             } catch (err) {
-                console.error(
+                logErrorUnlessTui(
                     `[oneclaw] MCP listTools 失败，已跳过服务 ${opts.server}:`,
                     err instanceof Error ? err.message : String(err)
                 );
