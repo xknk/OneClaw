@@ -1,6 +1,31 @@
 import path from "path";
 import os from "os";
-import "dotenv/config";
+import fs from "fs";
+import dotenv from "dotenv";
+
+/**
+ * 自当前工作目录向上查找含 pnpm-workspace.yaml 的目录，作为 monorepo 根（用于默认 projectRoot 与 .env）。
+ */
+function findWorkspaceRoot(start: string): string {
+    let dir = path.resolve(start);
+    for (let i = 0; i < 6; i++) {
+        if (fs.existsSync(path.join(dir, "pnpm-workspace.yaml"))) {
+            return dir;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) {
+            break;
+        }
+        dir = parent;
+    }
+    return path.resolve(start);
+}
+
+const _workspaceRoot = findWorkspaceRoot(process.cwd());
+if (fs.existsSync(path.join(_workspaceRoot, ".env"))) {
+    dotenv.config({ path: path.join(_workspaceRoot, ".env") });
+}
+dotenv.config({ path: path.join(process.cwd(), ".env"), override: true });
 
 /**
  * 配置层：从 .env 读取并做类型转换与默认值，供业务使用。
@@ -47,12 +72,12 @@ export const appConfig = {
     chatSummarizeThreshold: num("ONECLAW_CHAT_SUMMARIZE_THRESHOLD", 20),
     /** 工作目录路径：AI Agent 操作文件、读取技能（Skills）的根目录。 */
     // workspaceDir: str("ONECLAW_WORKSPACE_DIR", path.join(process.cwd(), "workspace")),
-    /** 当前项目根目录路径 */
-    projectRootDir: str("ONECLAW_PROJECT_ROOT_DIR", process.cwd()),
+    /** 当前项目根目录路径（monorepo 下默认指向仓库根，而非 apps/server） */
+    projectRootDir: str("ONECLAW_PROJECT_ROOT_DIR", _workspaceRoot),
     /** 技能目录路径 */
     skillsDir: str(
         "ONECLAW_SKILLS_DIR",
-        path.join(str("ONECLAW_PROJECT_ROOT_DIR", process.cwd()), "workspace")
+        path.join(str("ONECLAW_PROJECT_ROOT_DIR", _workspaceRoot), "workspace")
     ),
     /** 用户工作目录路径 */
     userWorkspaceDir: str(

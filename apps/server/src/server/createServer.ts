@@ -4,7 +4,8 @@
  */
 
 import express from "express";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import type { SessionKey } from "@/session/type";
 import {
     resetSession,
@@ -22,6 +23,21 @@ import { handleUnifiedChat, DEFAULT_SESSION_KEY } from "./chatProcessing";
 import { registerTaskRoutes } from "./taskRoutes";
 
 /**
+ * 解析已构建的前端静态目录（apps/web/dist），可通过 ONECLAW_WEB_DIST 覆盖。
+ */
+function resolveWebDistDir(): string | null {
+    const env = process.env.ONECLAW_WEB_DIST?.trim();
+    if (env && fs.existsSync(env)) {
+        return env;
+    }
+    const sibling = path.resolve(process.cwd(), "../web/dist");
+    if (fs.existsSync(sibling)) {
+        return sibling;
+    }
+    return null;
+}
+
+/**
  * 创建并配置 Express 服务器的主函数
  */
 export function createServer() {
@@ -30,20 +46,30 @@ export function createServer() {
     // 解析 JSON 请求体，并限制大小为 5MB 以处理复杂 Payload
     app.use(express.json({ limit: "5mb" }));
 
-    // 全局中间件：除了 QQ 机器人的 Webhook（由对方服务器鉴权），其他接口执行 webchat 鉴权
+    /**
+     * 公开：是否配置了 WEBCHAT_TOKEN（前端据此区分「访客 / 需登录」），不经过 webchatAuth。
+     */
+    app.get("/api/auth/status", (_req, res) => {
+        res.json({
+            webchatTokenRequired: Boolean(appConfig.webchatToken?.trim()),
+        });
+    });
+
+    // 全局中间件：QQ Webhook、公开鉴权状态 /api/auth/* 不校验；其余走 webchatAuth
     app.use((req, res, next) => {
         if (req.path.startsWith("/api/qq")) return next();
+        if (req.path.startsWith("/api/auth")) return next();
         return webchatAuth(req, res, next);
     });
 
-    // 托管公共静态资源（前端 UI 界面）
+    const webDist = resolveWebDistDir();
     const publicDir = path.join(process.cwd(), "public");
-    app.use(express.static(publicDir));
-
-    // 根路径跳转到 index.html
-    app.get("/", (_req, res) => {
-        res.sendFile(path.join(publicDir, "index.html"));
-    });
+    if (webDist) {
+        app.use(express.static(webDist));
+    }
+    if (fs.existsSync(publicDir)) {
+        app.use(express.static(publicDir));
+    }
 
     /**
      * Web 端聊天接口
@@ -154,6 +180,24 @@ export function createServer() {
         }
     });
     registerTaskRoutes(app);
+
+    if (webDist && fs.existsSync(path.join(webDist, "index.html"))) {
+        app.use((req, res, next) => {
+            if (req.method !== "GET") {
+                next();
+                return;
+            }
+            if (req.path.startsWith("/api")) {
+                next();
+                return;
+            }
+            res.sendFile(path.join(webDist, "index.html"), (err) => {
+                if (err) {
+                    next(err);
+                }
+            });
+        });
+    }
 
     return app;
 }

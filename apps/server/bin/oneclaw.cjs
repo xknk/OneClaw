@@ -7,11 +7,21 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 const root = path.resolve(__dirname, "..");
-const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
+function resolveTsxCli() {
+    const candidates = [
+        path.join(root, "node_modules", "tsx", "dist", "cli.mjs"),
+        path.join(root, "..", "..", "node_modules", "tsx", "dist", "cli.mjs"),
+    ];
+    for (const c of candidates) {
+        if (fs.existsSync(c)) return c;
+    }
+    return null;
+}
+const tsxCli = resolveTsxCli();
 const cliTs = path.join(root, "src", "cli.ts");
 
-if (!fs.existsSync(tsxCli)) {
-    console.error("[oneclaw] 未找到 tsx。请在本仓库根目录执行: pnpm install");
+if (!tsxCli) {
+    console.error("[oneclaw] 未找到 tsx。请在仓库根目录执行: pnpm install");
     process.exit(1);
 }
 if (!fs.existsSync(cliTs)) {
