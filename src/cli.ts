@@ -14,9 +14,26 @@ const program = new Command(); // 创建一个 Commander 实例
 
 // 配置 CLI 的元数据
 program
-    .name("oneclaw")                  // 定义工具的名字（用于帮助信息显示）
-    .description("OneClaw 本地 AI 助手") // 工具的功能描述
-    .version("0.1.0");                // 版本号，用户运行 `oneclaw --version` 时显示
+    .name("oneclaw")
+    .description("OneClaw 本地 AI 助手")
+    .version("0.1.0")
+    .addHelpText(
+        "after",
+        `
+快捷写法:
+  pnpm cli t ls              同 task list（t = task）
+  pnpm cli t get <taskId>    同 task get
+  pnpm cli tr dir            同 trace dir（tr = trace）
+  pnpm cli tr get <traceId>  同 trace get
+
+常用任务:
+  pnpm cli task create "标题" -T fix_bug
+  pnpm cli task transition <id> running
+  pnpm cli task approve <id>
+  pnpm cli task plan <id> plan.json
+  pnpm cli task review <id> --pass -m "LGTM"
+`
+    );
 
 // 注册子命令：onboard
 program

@@ -63,14 +63,21 @@ pnpm cli trace failed --since 24h
 
 ### CLI
 
+`task` 可写成 `t`，`trace` 可写成 `tr`；任务 ID / traceId 可放在子命令后面（位置参数），不必写长 `--id`。
+
 ```bash
-pnpm cli task templates
-pnpm cli task create --title "标题" --template fix_bug
-pnpm cli task list --limit 20
-pnpm cli task get --id <taskId>
-pnpm cli task transition --id <taskId> --to running
-pnpm cli task plan --id <taskId> --file plan.json
-pnpm cli task review --id <taskId> --pass --summary "LGTM"
-pnpm cli task approve --id <taskId> --comment "批准执行"
-pnpm cli task export --id <taskId> --format md --out report.md
+pnpm tasks                              # 等同 pnpm cli task list
+pnpm cli task tpl                       # 模板列表（templates 别名）
+pnpm cli task create "标题" -T fix_bug   # -T 模板；-t 为标题
+pnpm cli task ls -n 20 -f               # list 别名 ls；-n 条数；-f 仅失败
+pnpm cli task get <taskId>              # 或 task get -i <taskId>
+pnpm cli t transition <taskId> running # 或 -i / -t 形式
+pnpm cli task plan <taskId> plan.json   # 或 -f plan.json
+pnpm cli task review <taskId> --pass -m "LGTM"
+pnpm cli task approve <taskId> -c "批准执行"
+pnpm cli task export <taskId> -f md -o report.md
+pnpm cli tr dir                         # trace 日志目录（dir 别名 path）
+pnpm cli trace get <traceId> -d 7      # -d 扫描天数
 ```
+
+运行 `pnpm cli --help` 可查看文末「快捷写法」摘要。
