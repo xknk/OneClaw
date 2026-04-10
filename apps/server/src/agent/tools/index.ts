@@ -5,12 +5,14 @@
 import type { Tool } from "../types";
 import type { ToolSchema } from "../../llm/providers/ModelProvider";
 import type { ToolRiskLevel } from "../../tools/types";
-import { deleteFileInWorkspace, readFileInWorkspace, searchInWorkspace } from "./workspace";
+import { deleteFileInWorkspace, listDirInWorkspace, readFileInWorkspace, searchInWorkspace } from "./workspace";
 import { applyPatch } from "./applyPatch";
 import { controlledExec } from "./controlledExec";
 import { appConfig } from "../../config/evn";
 import { generateDailyReportTool } from "./generateDailyReport";
 import { getRuntimeSkillTool } from "@/skills/toolImplRegistry";
+import { executeFetchUrl } from "./fetchUrl";
+import { executeHttpRequest } from "./httpRequest";
 
 function getTime(): Tool {
     return {
@@ -25,10 +27,75 @@ function getTime(): Tool {
 function echo(): Tool {
     return {
         name: "echo",
-        description: "回显传入的 text 参数，用于测试工具调用",
+        description: "回显传入的 text 参数（多用于联调）",
         async execute(args) {
             const text = args?.text;
             return typeof text === "string" ? text : String(JSON.stringify(args ?? {}));
+        },
+    };
+}
+
+function jsonValidateTool(): Tool {
+    return {
+        name: "json_validate",
+        description:
+            "校验一段文本是否为合法 JSON；可选 pretty=true 时返回缩进格式化后的文本，便于阅读 API 响应或配置文件",
+        async execute(args) {
+            const text = typeof args?.text === "string" ? args.text : "";
+            if (!text.trim()) return "缺少参数 text（字符串）";
+            const pretty = args?.pretty === true;
+            try {
+                const parsed = JSON.parse(text) as unknown;
+                if (pretty) return JSON.stringify(parsed, null, 2);
+                const t = Array.isArray(parsed) ? "array" : parsed === null ? "null" : typeof parsed;
+                return `合法 JSON（顶层类型: ${t}）`;
+            } catch (e) {
+                return `非法 JSON: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function fetchUrlTool(): Tool {
+    return {
+        name: "fetch_url",
+        riskLevel: "medium",
+        description:
+            "HTTP GET 拉取外部网页或公开 API 的文本内容（仅 http/https）。需要文档、changelog、接口说明时优先使用；内网地址默认禁止，可用 ONECLAW_FETCH_ALLOW_PRIVATE_HOSTS 放开",
+        async execute(args) {
+            return executeFetchUrl(args ?? {});
+        },
+    };
+}
+
+function httpRequestTool(): Tool {
+    return {
+        name: "http_request",
+        riskLevel: "medium",
+        description:
+            "HTTP 请求（GET/POST/PUT/PATCH/DELETE/HEAD），用于调用公开 REST API。与 fetch_url 共用安全策略与 ONECLAW_FETCH_*；勿在参数中泄露密钥",
+        async execute(args) {
+            return executeHttpRequest(args ?? {});
+        },
+    };
+}
+
+function listDirectoryTool(): Tool {
+    return {
+        name: "list_directory",
+        description:
+            "列出 workspace 内某目录的直接子项（不递归）。path 空字符串或 . 表示主 workspace 根；返回每行 type<TAB>name",
+        async execute(args) {
+            const p = typeof args?.path === "string" ? args.path : "";
+            const maxEntries =
+                typeof args?.max_entries === "number" && Number.isFinite(args.max_entries)
+                    ? args.max_entries
+                    : 200;
+            try {
+                return await listDirInWorkspace(p, maxEntries);
+            } catch (e) {
+                return `列目录失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
         },
     };
 }
@@ -136,6 +203,10 @@ function execTool(): Tool {
 const tools: Tool[] = [
     getTime(),
     echo(),
+    jsonValidateTool(),
+    fetchUrlTool(),
+    httpRequestTool(),
+    listDirectoryTool(),
     readFile(),
     searchFiles(),
     applyPatchTool(),
@@ -155,8 +226,67 @@ export function getToolSchemas(): ToolSchema[] {
         { name: "get_time", description: "返回当前服务器的日期与时间（本地时区）", parameters: { type: "object" } },
         {
             name: "echo",
-            description: "回显传入的 text 参数，用于测试工具调用",
+            description: "回显传入的 text 参数（多用于联调）",
             parameters: { type: "object", properties: { text: { type: "string", description: "要回显的文本" } } },
+        },
+        {
+            name: "json_validate",
+            description: "校验 JSON 语法；pretty 为 true 时返回格式化后的文本",
+            parameters: {
+                type: "object",
+                required: ["text"],
+                properties: {
+                    text: { type: "string", description: "待校验的 JSON 字符串" },
+                    pretty: { type: "boolean", description: "为 true 时返回缩进后的 JSON" },
+                },
+            },
+        },
+        {
+            name: "fetch_url",
+            description:
+                "HTTP GET 获取外部网页或公开 API 的文本；仅 http(s)。参数 max_chars 可选，限制返回正文长度",
+            parameters: {
+                type: "object",
+                required: ["url"],
+                properties: {
+                    url: { type: "string", description: "完整 URL，如 https://developer.mozilla.org/zh-CN/docs/Web/API/fetch" },
+                    max_chars: {
+                        type: "number",
+                        description: "正文最大字符数（可选，受服务器 ONECLAW_FETCH_MAX_RESPONSE_CHARS 上限约束）",
+                    },
+                },
+            },
+        },
+        {
+            name: "http_request",
+            description:
+                "HTTP 请求（GET/POST/PUT/PATCH/DELETE/HEAD），用于 REST/JSON API；body 或 body_json 用于写操作；headers 可选对象",
+            parameters: {
+                type: "object",
+                required: ["url"],
+                properties: {
+                    url: { type: "string", description: "完整 https URL" },
+                    method: {
+                        type: "string",
+                        description: "默认 GET；写操作常用 POST、PUT、PATCH、DELETE",
+                    },
+                    headers: { type: "object", description: "可选，键值均为字符串，如 Authorization、Content-Type" },
+                    body: { type: "string", description: "原始请求体字符串（如 JSON 文本）" },
+                    body_json: { type: "object", description: "将自动 JSON.stringify 并设 Content-Type: application/json（若未显式传 headers）" },
+                    max_chars: { type: "number", description: "响应正文最大字符数（可选）" },
+                },
+            },
+        },
+        {
+            name: "list_directory",
+            description: "列出 workspace 目录下直接子项（不递归）；path 默认根目录",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: { type: "string", description: "相对路径，如 apps/web；空或 . 表示主 workspace 根" },
+                    max_entries: { type: "number", description: "最多返回条数，默认 200，上限 500" },
+                },
+            },
         },
         {
             name: "read_file",

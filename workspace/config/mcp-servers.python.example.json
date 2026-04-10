@@ -1,0 +1,9 @@
+[
+  {
+    "id": "mcp-fetch",
+    "command": "python",
+    "args": ["-m", "mcp_server_fetch"],
+    "allowedToolNames": ["fetch"],
+    "priority": 5
+  }
+]

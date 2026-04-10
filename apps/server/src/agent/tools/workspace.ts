@@ -79,6 +79,31 @@ export async function deleteFileInWorkspace(relativePath: string): Promise<strin
     return `已删除 ${relativePath}`;
 }
 
+/**
+ * 列出工作区内某目录的直接子项（不递归）。path 空或 "." 表示主 workspace 根。
+ */
+export async function listDirInWorkspace(relativePath: string, maxEntries = 200): Promise<string> {
+    const safe = relativePath.trim() === "" ? "." : relativePath;
+    const fullPath = resolveInWorkspace(safe, "read");
+    const stat = await fs.stat(fullPath);
+    if (!stat.isDirectory()) {
+        throw new Error(`不是目录: ${safe}`);
+    }
+    const cap = Math.min(Math.max(1, Math.floor(maxEntries)), 500);
+    const entries = await fs.readdir(fullPath, { withFileTypes: true });
+    const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name, "en"));
+    const lines: string[] = [];
+    for (let i = 0; i < sorted.length && i < cap; i++) {
+        const e = sorted[i]!;
+        const tag = e.isDirectory() ? "dir" : e.isFile() ? "file" : "other";
+        lines.push(`${tag}\t${e.name}`);
+    }
+    if (sorted.length > cap) {
+        lines.push(`… 共 ${sorted.length} 项，已截断为 ${cap} 项（可调 max_entries）`);
+    }
+    return lines.length ? lines.join("\n") : "（空目录）";
+}
+
 function shouldSkipDirForWalk(absDir: string): boolean {
     return getPolicyDeniedPrefixes().some((d) => isPathInsideRoot(d, absDir));
 }

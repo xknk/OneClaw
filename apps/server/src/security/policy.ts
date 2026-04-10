@@ -1,4 +1,5 @@
 import { getAgentConfig } from "@/agent/agentRegistry";
+import { appConfig } from "@/config/evn";
 import { checkPathPolicy } from "@/security/pathPolicy";
 import type { ToolGuardResult } from "@/security/toolGuard";
 import { mergeProfileOverride, readPolicyOverridesFile } from "@/security/policyOverrides";
@@ -205,6 +206,20 @@ export function evaluateToolPermission(
         return { allow: true };
     }
 
+    if (toolName === "list_directory") {
+        if (!profile.allowReadWorkspace) {
+            return deny("无权限：当前会话禁止列出 workspace 目录", "POLICY_LIST_DIR_FORBIDDEN", pid);
+        }
+        const pathArg = typeof args?.path === "string" ? args.path : "";
+        const trimmed = pathArg.trim();
+        if (trimmed === "" || trimmed === ".") {
+            return { allow: true };
+        }
+        const v = checkPathPolicy(pathArg, pOpt);
+        if (v) return deny(v.message, v.code, { ...v.meta, ...pid });
+        return { allow: true };
+    }
+
     if (toolName === "apply_patch") {
         if (!profile.allowWriteWorkspace) {
             return deny("无权限：当前会话禁止写入 workspace", "POLICY_WRITE_FORBIDDEN", pid);
@@ -246,6 +261,20 @@ export function evaluateToolPermission(
                     );
                 }
             }
+        }
+        return { allow: true };
+    }
+
+    if (toolName === "fetch_url" || toolName === "http_request") {
+        if (!appConfig.fetchUrlEnabled) {
+            return deny(
+                "无权限：出站 HTTP 工具已在环境中关闭（ONECLAW_FETCH_URL_ENABLED）",
+                "POLICY_FETCH_DISABLED",
+                pid
+            );
+        }
+        if (ctx.profileId === "qq_group") {
+            return deny("无权限：QQ 渠道不允许使用出站 HTTP 工具", "POLICY_FETCH_QQ_FORBIDDEN", pid);
         }
         return { allow: true };
     }

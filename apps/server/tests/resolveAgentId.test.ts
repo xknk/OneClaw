@@ -33,6 +33,11 @@ describe("resolveAgentId", () => {
         expect(resolveAgentId(inbound({ text: "/report 今日总结" }))).toBe("daily_report");
     });
 
+    it("通过 /fe 或 /frontend 绑定到 Frontend Agent", () => {
+        expect(resolveAgentId(inbound({ text: "/fe 优化列表渲染" }))).toBe("frontend");
+        expect(resolveAgentId(inbound({ text: "/frontend 查文档" }))).toBe("frontend");
+    });
+
     it("当识别出特定意图（intent）为 code_review 时进行路由", () => {
         // 验证：如果上层自然语言处理（NLP）已经预先分析出用户的意图是“代码审查”，
         // 则系统应将其指派给专门的 code_review Agent。

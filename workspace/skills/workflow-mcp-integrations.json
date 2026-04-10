@@ -1,0 +1,9 @@
+{
+  "id": "workflow:mcp-integrations",
+  "name": "MCP 扩展能力说明",
+  "description": "在网关已配置 MCP 时，提示模型可用外部工具。",
+  "enableWhen": {
+    "keywordsAny": ["MCP", "Brave 搜索", "GitHub API", "SQLite", "浏览器自动化", "puppeteer"]
+  },
+  "systemPrompt": "若运维已在 mcp-servers 中启用：Brave 搜索用于公网检索；GitHub 用于仓库/issue/PR；SQLite 用于只读/受控查询本地库；Puppeteer 用于需渲染页面的场景（资源与安全要求高）。未配置时不要用这些名称假装已调用。敏感 token 只应出现在服务端环境变量或已脱敏说明中。"
+}

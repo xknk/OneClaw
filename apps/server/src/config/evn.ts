@@ -127,6 +127,14 @@ export const appConfig = {
      * MCP：单次 listTools（含 connect）最大等待毫秒；超时视为该 MCP 不可用，上层跳过工具列表。
      */
     mcpListToolsTimeoutMs: num("ONECLAW_MCP_LIST_TOOLS_TIMEOUT_MS", 10_000),
+    /** 内置 fetch_url 是否启用 */
+    fetchUrlEnabled: bool("ONECLAW_FETCH_URL_ENABLED", true),
+    /** fetch_url 单请求超时（毫秒） */
+    fetchTimeoutMs: num("ONECLAW_FETCH_TIMEOUT_MS", 30_000),
+    /** fetch_url 响应正文最大字符数（硬上限） */
+    fetchMaxResponseChars: num("ONECLAW_FETCH_MAX_RESPONSE_CHARS", 400_000),
+    /** 为 true 时允许访问内网/本机地址（仅建议本机开发） */
+    fetchAllowPrivateHosts: bool("ONECLAW_FETCH_ALLOW_PRIVATE_HOSTS", false),
     /** V4 M2：是否启用步骤工具白名单强制执行 */
     m2StepToolEnforcement: bool("ONECLAW_M2_STEP_TOOL_ENFORCEMENT", true),
     /** 界面语言（TUI、Web 服务端默认值、摘要提示语等） */

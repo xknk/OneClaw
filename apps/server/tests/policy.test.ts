@@ -51,6 +51,17 @@ describe("checkToolPermission", () => {
         const c = ctx({ profileId: "webchat_default" });
         expect(checkToolPermission(c, "search_files", { glob: "**/../x" })).toMatch(/\.\./);
     });
+
+    it("list_directory 根路径在 readonly 下可读", () => {
+        const c = ctx({ profileId: "readonly" });
+        expect(checkToolPermission(c, "list_directory", { path: "." })).toBeNull();
+        expect(checkToolPermission(c, "list_directory", { path: "src" })).toBeNull();
+    });
+
+    it("qq_group 应禁止 http_request", () => {
+        const c = ctx({ profileId: "qq_group" });
+        expect(checkToolPermission(c, "http_request", { url: "https://example.com" })).toMatch(/QQ/);
+    });
 });
 
 describe("evaluateToolPermission", () => {

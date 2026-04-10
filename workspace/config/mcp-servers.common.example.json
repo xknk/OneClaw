@@ -1,0 +1,15 @@
+[
+  {
+    "id": "mcp-fetch",
+    "command": "uvx",
+    "args": ["mcp-server-fetch"],
+    "allowedToolNames": ["fetch"],
+    "priority": 5
+  },
+  {
+    "id": "mcp-filesystem",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "REPLACE_WITH_ALLOWED_ABSOLUTE_DIR"],
+    "priority": 3
+  }
+]

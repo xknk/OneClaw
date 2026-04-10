@@ -49,6 +49,24 @@ export interface AgentRegistryFile {
 const DEFAULT_AGENTS: AgentConfig[] = [
     { id: "main", displayName: "Main" }, // 通用型 Agent
     {
+        id: "frontend",
+        displayName: "Frontend",
+        systemPromptPrefix:
+            "你是资深前端工程师，熟悉 TypeScript、现代框架（React/Vue 等）、CSS、无障碍与性能。浏览目录结构用 list_directory；只读文档或网页用 fetch_url；调用 REST 接口用 http_request（POST/PUT 等）；不要编造未经验证的 API。",
+        builtInToolAllowlist: [
+            "fetch_url",
+            "http_request",
+            "list_directory",
+            "read_file",
+            "search_files",
+            "get_time",
+            "json_validate",
+            "apply_patch",
+            "exec",
+        ],
+        permissionProfileId: "webchat_default",
+    },
+    {
         id: "daily_report",
         displayName: "Daily Report",
         systemPromptPrefix:
@@ -59,8 +77,17 @@ const DEFAULT_AGENTS: AgentConfig[] = [
     {
         id: "code_review",
         displayName: "Code Review",
-        systemPromptPrefix: "你是代码评审助手。仅阅读与评审，不做写入与命令执行。",
-        builtInToolAllowlist: ["read_file", "search_files", "get_time"],
+        systemPromptPrefix:
+            "你是代码评审助手。仅阅读与评审，不做写入与命令执行。若需对照外部文档或安全公告，可使用 fetch_url。",
+        builtInToolAllowlist: [
+            "read_file",
+            "search_files",
+            "get_time",
+            "fetch_url",
+            "http_request",
+            "list_directory",
+            "json_validate",
+        ],
         permissionProfileId: "readonly",
     },
 ];
@@ -69,6 +96,8 @@ const DEFAULT_AGENTS: AgentConfig[] = [
  * 默认的触发规则（如：输入 /report 直接找日报助手）
  */
 const DEFAULT_BINDINGS: AgentBindingRule[] = [
+    { textStartsWith: "/fe", agentId: "frontend" },
+    { textStartsWith: "/frontend", agentId: "frontend" },
     { textStartsWith: "/report", agentId: "daily_report" },
     { textStartsWith: "/daily", agentId: "daily_report" },
     { textStartsWith: "/review", agentId: "code_review" },

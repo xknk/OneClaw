@@ -1,0 +1,9 @@
+{
+  "id": "workflow:rest-api",
+  "name": "REST / 接口联调",
+  "description": "在需要调用 HTTP API 或调试接口时启用。",
+  "enableWhen": {
+    "agentIds": ["main", "frontend"]
+  },
+  "systemPrompt": "涉及调用 HTTP API 时：只读/查文档优先用 fetch_url；需要 POST/PUT/PATCH/DELETE 或自定义 Header 时用 http_request。不要把 API Key、token、密码写进可被用户日志完整记录的参数里；优先使用环境变量或服务端已有配置。响应为 JSON 时先确认 status 再解析 body。"
+}

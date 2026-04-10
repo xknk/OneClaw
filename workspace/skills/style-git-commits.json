@@ -1,0 +1,9 @@
+{
+  "id": "style:git-commits",
+  "name": "Git 提交说明",
+  "description": "在讨论分支、合并、PR、rebase、commit 时注入提交信息规范。",
+  "enableWhen": {
+    "keywordsAny": ["commit", "merge", "rebase", "分支", "PR", "pull request", "cherry-pick"]
+  },
+  "systemPrompt": "提交信息可使用简明英文或中文；建议格式 type(scope): summary（如 feat(web): add login）。单次提交聚焦单一变更；若有破坏性变更，在说明中写清迁移方式。"
+}

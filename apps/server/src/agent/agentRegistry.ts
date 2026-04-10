@@ -12,7 +12,7 @@ import {
 /**
  * 定义当前系统支持的 Agent 唯一标识符类型
  */
-export type AgentId = "main" | "daily_report" | "code_review";
+export type AgentId = "main" | "frontend" | "daily_report" | "code_review";
 
 /**
  * 兜底配置：当找不到任何匹配的 Agent 时使用
@@ -84,6 +84,10 @@ export function getBuiltInToolAllowlistForAgent(agentId: string): Set<string> | 
  */
 export function normalizeTextForAgent(agentId: string, raw: string): string {
     const text = raw.trim();
+    if (agentId === "frontend") {
+        if (text.startsWith("/frontend")) return text.replace(/^\/frontend\s*/i, "").trim() || "请协助前端开发任务";
+        if (text.startsWith("/fe")) return text.replace(/^\/fe\s*/i, "").trim() || "请协助前端开发任务";
+    }
     if (agentId === "daily_report") {
         // 匹配并移除指令，如果移除后内容为空，提供默认动作描述
         if (text.startsWith("/report")) return text.replace(/^\/report\s*/i, "").trim() || "请生成今日日报";
