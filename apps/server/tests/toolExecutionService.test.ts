@@ -109,7 +109,8 @@ describe("ToolExecutionService", () => {
             },
             async execute() {
                 count += 1;
-                await new Promise((r) => setTimeout(r, 100));
+                // 永不 resolve，避免与短超时竞态（慢机上 20ms 定时器可能晚于 100ms 完成）
+                await new Promise<never>(() => {});
                 return {
                     ok: true,
                     content: "too late",
@@ -149,7 +150,7 @@ describe("ToolExecutionService", () => {
             },
             async execute() {
                 count += 1;
-                await new Promise((r) => setTimeout(r, 100));
+                await new Promise<never>(() => {});
                 return {
                     ok: true,
                     content: "too late",
@@ -226,7 +227,7 @@ describe("ToolExecutionService", () => {
             },
             async execute() {
                 count += 1;
-                await new Promise((r) => setTimeout(r, 100));
+                await new Promise<never>(() => {});
                 return {
                     ok: true,
                     content: "late",

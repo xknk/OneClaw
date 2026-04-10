@@ -284,20 +284,14 @@ export async function handleUnifiedChat(
                 if (taskId && appConfig.m2StepToolEnforcement) {
                     const runningStep = await getRunningPlanStep(taskId);
 
-                    // fail-closed：没有 running step 直接拒绝
+                    // fail-closed：没有 running step 直接拒绝（返回文案，避免抛错中断整轮对话）
                     if (!runningStep) {
-                        const err = new ToolPolicyError(
-                            "STEP_INVALID",
-                            "策略拒绝：当前任务无 running 步骤，禁止工具调用",
-                            { toolName }
-                        );
                         await appendTimelineNoteSafe(taskId, "tool_denied", {
                             traceId,
                             toolName,
-                            code: err.code,
-                            stepIndex: err.stepIndex,
+                            code: "STEP_INVALID",
                         });
-                        throw err;
+                        return `策略拒绝：[STEP_INVALID] 当前任务无 running 步骤，禁止调用工具「${toolName}」。`;
                     }
 
                     try {
@@ -310,6 +304,7 @@ export async function handleUnifiedChat(
                                 code: e.code,
                                 stepIndex: e.stepIndex,
                             });
+                            return `策略拒绝：[${e.code}] ${e.message}`;
                         }
                         throw e;
                     }

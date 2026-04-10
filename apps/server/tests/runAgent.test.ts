@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ToolSchema } from "@/llm/providers/ModelProvider";
 import * as model from "@/llm/model";
 import { runAgent } from "@/agent/runAgent";
+import { ToolPolicyError } from "@/tasks/stepToolPolicy";
 
 // 1. 【模拟模型层】：模拟 chatWithModelWithTools 函数，避免测试时产生真实的 API 开销
 vi.mock("@/llm/model", () => ({
@@ -172,5 +173,90 @@ describe("runAgent", () => {
         expect(out).toBe("收到了");
         const second = vi.mocked(model.chatWithModelWithTools).mock.calls[1][0];
         expect(JSON.stringify(second)).toContain("无权限：结构化拒绝");
+    });
+
+    it("自定义 executeTool 抛错时转为工具结果字符串，不中断对话", async () => {
+        vi.mocked(model.chatWithModelWithTools)
+            .mockResolvedValueOnce({
+                content: "",
+                toolCalls: [{ name: "any", args: {} }],
+            })
+            .mockResolvedValueOnce({
+                content: "已处理异常说明",
+                toolCalls: [],
+            });
+
+        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+            toolSchemas,
+            executeTool: async () => {
+                throw new Error("provider boom");
+            },
+        });
+
+        expect(out).toBe("已处理异常说明");
+        const second = vi.mocked(model.chatWithModelWithTools).mock.calls[1][0];
+        expect(JSON.stringify(second)).toContain("工具执行异常:");
+    });
+
+    it("自定义 executeTool 抛出 ToolPolicyError 时转为策略拒绝文案", async () => {
+        vi.mocked(model.chatWithModelWithTools)
+            .mockResolvedValueOnce({
+                content: "",
+                toolCalls: [{ name: "any", args: {} }],
+            })
+            .mockResolvedValueOnce({
+                content: "知道了",
+                toolCalls: [],
+            });
+
+        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+            toolSchemas,
+            executeTool: async () => {
+                throw new ToolPolicyError("NOT_IN_ALLOWLIST", "不在白名单", { toolName: "x" });
+            },
+        });
+
+        expect(out).toBe("知道了");
+        const second = vi.mocked(model.chatWithModelWithTools).mock.calls[1][0];
+        expect(JSON.stringify(second)).toContain("策略拒绝：");
+    });
+
+    it("模型层抛错时返回可读文案并触发 llm.error 事件", async () => {
+        vi.mocked(model.chatWithModelWithTools).mockRejectedValueOnce(new Error("ollama offline"));
+
+        const events: { type: string; error?: string }[] = [];
+        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+            toolSchemas,
+            onModelEvent: (e) => {
+                if (e.type === "llm.error") events.push({ type: e.type, error: e.error });
+            },
+        });
+
+        expect(out).toBe("模型请求失败：ollama offline");
+        expect(events).toEqual([{ type: "llm.error", error: "ollama offline" }]);
+        expect(model.chatWithModelWithTools).toHaveBeenCalledTimes(1);
+    });
+
+    it("默认 toolGuard 抛错时转为工具结果字符串", async () => {
+        vi.mocked(model.chatWithModelWithTools)
+            .mockResolvedValueOnce({
+                content: "",
+                toolCalls: [{ name: "echo", args: { text: "a" } }],
+            })
+            .mockResolvedValueOnce({
+                content: "收到",
+                toolCalls: [],
+            });
+
+        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+            toolSchemas,
+            toolGuard: () => {
+                throw new Error("policy bug");
+            },
+        });
+
+        expect(out).toBe("收到");
+        const second = vi.mocked(model.chatWithModelWithTools).mock.calls[1][0];
+        expect(JSON.stringify(second)).toContain("工具执行异常:");
     });
 });

@@ -7,7 +7,12 @@
  * 3. 循环 (Loop)：将结果反馈给 LLM，开启下一轮推理，直到任务完成。
  */
 
-import type { ChatMessage, AgentMessage, ToolSchema } from "@/llm/providers/ModelProvider";
+import type {
+    ChatMessage,
+    AgentMessage,
+    ToolSchema,
+    ChatWithToolsResult,
+} from "@/llm/providers/ModelProvider";
 import { chatWithModelWithTools } from "@/llm/model";
 import { getTool, getToolSchemas } from "./tools/index";
 import type { Tool } from "./types";
@@ -24,6 +29,32 @@ const MAX_TOOL_ROUNDS = 5;
  * 定义工具执行器的类型签名
  */
 type executeTool = (toolName: string, args: Record<string, unknown> | undefined) => Promise<string>;
+
+/** 与 ToolExecutionService、chatProcessing 等返回文案对齐，用于判断 tool 轮次是否应视为失败 */
+function isToolFailureResultString(result: string): boolean {
+    return (
+        result.startsWith("错误：") ||
+        result.startsWith("无权限：") ||
+        result.startsWith("参数错误：") ||
+        result.startsWith("工具执行失败:") ||
+        result.startsWith("工具执行异常:") ||
+        result.startsWith("策略拒绝：") ||
+        result.startsWith("策略拒绝:")
+    );
+}
+
+/**
+ * 自定义 executeTool 抛错时转为模型可读的 observation，避免整轮 ReAct 中断。
+ */
+function formatExecuteToolException(err: unknown): string {
+    if (err instanceof Error) {
+        if (err.name === "ToolPolicyError") {
+            return `策略拒绝：${err.message}`;
+        }
+        return `工具执行异常: ${err.message}`;
+    }
+    return `工具执行异常: ${String(err)}`;
+}
 
 /**
  * Agent 运行配置选项
@@ -53,12 +84,17 @@ export interface RunAgentOptions {
     /** 自定义工具执行逻辑，若提供则绕过本地 getTool 执行逻辑 */
     executeTool?: executeTool;
     /** 模型生命周期事件通知，可用于前端展示进度条或 Token 计算 */
-    onModelEvent?: (event: {
-        type: "llm.request" | "llm.response";
-        round: number;
-        toolCallCount?: number;
-        contentLength?: number;
-    }) => Promise<void> | void;
+    onModelEvent?: (
+        event:
+            | { type: "llm.request"; round: number; contentLength?: number }
+            | {
+                  type: "llm.response";
+                  round: number;
+                  toolCallCount?: number;
+                  contentLength?: number;
+              }
+            | { type: "llm.error"; round: number; error: string }
+    ) => Promise<void> | void;
 }
 
 /**
@@ -94,7 +130,21 @@ export async function runAgent(
         });
 
         // 调用模型获取响应：包含 content (回复文本) 和 toolCalls (工具调用请求)
-        const { content, toolCalls } = await chatWithModelWithTools(agentMessages, toolSchemas);
+        let content: string;
+        let toolCalls: ChatWithToolsResult["toolCalls"];
+        try {
+            const r = await chatWithModelWithTools(agentMessages, toolSchemas);
+            content = r.content;
+            toolCalls = r.toolCalls;
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await options?.onModelEvent?.({
+                type: "llm.error",
+                round,
+                error: msg,
+            });
+            return `模型请求失败：${msg}`;
+        }
         lastContent = content;
 
         await options?.onModelEvent?.({
@@ -133,13 +183,7 @@ export async function runAgent(
                 toolName: call.name,
                 args: call.args,
                 result,
-                // 根据结果字符串前缀简单判断执行状态
-                ok: !(
-                    result.startsWith("错误：") ||
-                    result.startsWith("无权限：") ||
-                    result.startsWith("参数错误：") ||
-                    result.startsWith("工具执行失败:")
-                ),
+                ok: !isToolFailureResultString(result),
                 durationMs,
             });
 
@@ -170,14 +214,23 @@ async function executeSingleTool(
         toolGuard?: RunAgentOptions["toolGuard"];
     }
 ): Promise<string> {
-    // 场景 A：如果外部提供了自定义执行器，直接透传执行
+    // 场景 A：如果外部提供了自定义执行器，透传执行并将异常转为 observation（生产上禁止因单次工具抛错中断整轮对话）
     if (hooks.executeTool) {
-        return await hooks.executeTool(name, args);
+        try {
+            return await hooks.executeTool(name, args);
+        } catch (err) {
+            return formatExecuteToolException(err);
+        }
     }
 
     // 场景 B：使用默认执行逻辑
-    // 1. 权限拦截校验
-    const guard = normalizeToolGuardResult(hooks.toolGuard?.(name, args));
+    // 1. 权限拦截校验（守卫若抛错则视为可恢复的 observation，避免中断 ReAct）
+    let guard: ToolGuardResult;
+    try {
+        guard = normalizeToolGuardResult(hooks.toolGuard?.(name, args));
+    } catch (err) {
+        return formatExecuteToolException(err);
+    }
     if (!guard.allow) {
         return guard.message; // 返回拦截信息给 LLM，让 LLM 决定如何回复用户
     }

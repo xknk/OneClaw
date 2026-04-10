@@ -76,6 +76,7 @@ export function registerTraceCommands(program: Command): void {
                 if (e.eventType === "tool.failed") return true;
                 if (e.eventType === "tool.denied") return true;
                 if (e.eventType === "tool.validation.failed") return true;
+                if (e.eventType === "llm.error") return true;
                 if (e.eventType === "tool.execute.end" && e.ok === false) return true;
                 if (e.eventType === "session.end" && e.ok === false) return true;
                 return false;
@@ -143,6 +144,7 @@ export function registerTraceCommands(program: Command): void {
 
                 const llmReq = events.filter((e) => e.eventType === "llm.request").length;
                 const llmResp = events.filter((e) => e.eventType === "llm.response").length;
+                const llmErr = events.filter((e) => e.eventType === "llm.error").length;
                 const toolResolve = events.filter((e) => e.eventType === "tool.resolve").length;
                 const toolEnd = events.filter((e) => e.eventType === "tool.execute.end").length;
                 const failed = events.filter(
@@ -150,6 +152,7 @@ export function registerTraceCommands(program: Command): void {
                         e.eventType === "tool.failed" ||
                         e.eventType === "tool.denied" ||
                         e.eventType === "tool.validation.failed" ||
+                        e.eventType === "llm.error" ||
                         (e.eventType === "tool.execute.end" && e.ok === false)
                 ).length;
 
@@ -184,7 +187,7 @@ export function registerTraceCommands(program: Command): void {
                     `agentId: ${first.agentId ?? "-"}`,
                     `channelId: ${first.channelId ?? "-"}`,
                     `profileId: ${first.profileId ?? "-"}`,
-                    `events: ${events.length}, llm.request=${llmReq}, llm.response=${llmResp}, tool.resolve=${toolResolve}, tool.execute.end=${toolEnd}, failed=${failed}`,
+                    `events: ${events.length}, llm.request=${llmReq}, llm.response=${llmResp}, llm.error=${llmErr}, tool.resolve=${toolResolve}, tool.execute.end=${toolEnd}, failed=${failed}`,
                     "",
                     "Timeline:",
                 ];
