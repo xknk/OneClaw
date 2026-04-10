@@ -71,7 +71,7 @@ export function loadDynamicTaskTemplates(): Record<string, TaskTemplateDefinitio
     try {
         if (!fs.existsSync(p)) return {};
         const parsed = JSON.parse(fs.readFileSync(p, "utf8")) as unknown;
-        const list: unknown =
+        const list: unknown[] =
             isRecord(parsed) && Array.isArray(parsed.templates)
                 ? parsed.templates
                 : Array.isArray(parsed)
