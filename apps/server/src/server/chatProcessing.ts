@@ -1,6 +1,5 @@
 import crypto from "node:crypto"
 import { runAgent } from "@/agent/runAgent";
-import { getAllTools } from "@/agent/tools";
 import { UnifiedInboundMessage, UnifiedOutboundMessage } from "@/channels/unifiedMessage";
 import { appConfig } from "@/config/evn";
 import { ChatMessage } from "@/llm/model";
@@ -13,9 +12,9 @@ import { evaluateToolPermission, resolveProfileId } from "@/security/policy";
 import { appendToolCallLog, makeToolCallLog } from "@/agent/toolCallLog";
 import {
     getAgentConfig,
-    resolveAgentId,
+    resolveEffectiveAgent,
     normalizeTextForAgent,
-    getBuiltInToolAllowlistForAgent
+    getBuiltInToolAllowlistForAgent,
 } from "@/agent/agentRegistry";
 import { rebuildRuntimeSkillTools } from "@/skills/toolImplRegistry";
 import {
@@ -38,7 +37,11 @@ import {
 import { formatTaskContextForModel } from "@/tasks/taskContextPrompt";
 import { interceptHighRiskToolForTask } from "@/tasks/taskApproval";
 import { ToolPolicyGuard, ToolPolicyError } from "@/tasks/stepToolPolicy";
-import { getTaskPlanFromRecord } from "@/tasks/collaborationService";
+import type { PlanStep } from "@/tasks/collaborationTypes";
+import {
+    getRunningPlanStepFromRecord,
+    updateTaskOrchestrationSnapshot,
+} from "@/tasks/collaborationService";
 /** 
  * 定义出站发送函数的类型签名
  * 不同的渠道（Web/QQ）会传入不同的实现来完成消息回传
@@ -84,14 +87,15 @@ async function appendTimelineToolStepSafe(taskId: string, input: Parameters<type
     } catch (e) { console.error("[tasks] appendTimelineToolStep failed:", e); }
 }
 
-// 获取正在运行的计划步骤
-async function getRunningPlanStep(taskId?: string) {
+/** 解析当前 running 步：优先用 prepare 已加载的 record，避免重复读盘 */
+async function resolveRunningPlanStepForChat(
+    taskId: string | undefined,
+    taskPrep: PrepareTaskForChatResult | undefined,
+): Promise<PlanStep | null> {
     if (!taskId) return null;
+    if (taskPrep?.record) return getRunningPlanStepFromRecord(taskPrep.record);
     const rec = await getTask(taskId);
-    if (!rec) return null;
-    const plan = getTaskPlanFromRecord(rec);
-    if (!plan?.steps?.length) return null;
-    return plan.steps.find((s) => s.status === "running") ?? null;
+    return rec ? getRunningPlanStepFromRecord(rec) : null;
 }
 
 /** 对话失败：若任务在可失败状态则 failTask，否则忽略 */
@@ -138,18 +142,10 @@ export async function handleUnifiedChat(
     /** 有 taskId 时转录按任务隔离，避免多任务共用 main 历史 */
     const sessionKey = (taskId ? `task:${taskId}` : userSessionKey) as SessionKey;
 
-    // 确定由哪个 AI 助手响应，并获取其特定配置
-    const agentId = resolveAgentId(inbound);
-    const agent = getAgentConfig(agentId);
-    // 权限画像识别：基于渠道和 Agent 确定当前用户的操作权限
-    const profileId = resolveProfileId({ channelId: inbound.channelId, agentId });
-    const userText = normalizeTextForAgent(agentId, inbound.text);
-
-    // --- 2. 任务状态前置准备 ---
+    // --- 2. 任务状态前置准备（须先于 Agent 解析，以便读取计划中的 running 步） ---
     let taskPrep: PrepareTaskForChatResult | undefined;
     if (taskId) {
         try {
-            // 调用之前定义的函数，将任务推向 running 状态或标记为 notesOnly
             taskPrep = await prepareTaskForChatRound(taskId);
         } catch (e) {
             console.error("[tasks] prepareTaskForChatRound failed:", e);
@@ -157,8 +153,47 @@ export async function handleUnifiedChat(
         }
     }
 
-    // 发送链路开始追踪事件
-    const traceBase = { traceId, sessionKey, agentId, channelId: inbound.channelId, profileId };
+    const runningStepForTrace = await resolveRunningPlanStepForChat(taskId, taskPrep);
+
+    const { agentId, decisionSource } = resolveEffectiveAgent(inbound, runningStepForTrace);
+    const agent = getAgentConfig(agentId);
+    const profileId = resolveProfileId({ channelId: inbound.channelId, agentId });
+    const userText = normalizeTextForAgent(agentId, inbound.text);
+
+    if (taskId) {
+        try {
+            await updateTaskOrchestrationSnapshot(
+                taskId,
+                {
+                    activeAgentId: agentId,
+                    activeStepIndex: runningStepForTrace?.index,
+                    lastDecisionSource: decisionSource,
+                },
+                taskPrep?.record,
+            );
+        } catch (e) {
+            console.error("[tasks] updateTaskOrchestrationSnapshot failed:", e);
+        }
+    }
+
+    // 发送链路开始追踪事件（编排字段与多 Agent / 分步任务 trace 对齐）
+    const traceBase = {
+        traceId,
+        sessionKey,
+        agentId,
+        channelId: inbound.channelId,
+        profileId,
+        decisionSource,
+        ...(taskId
+            ? {
+                  orchestrationId: taskId,
+                  ...(runningStepForTrace != null ? { stepIndex: runningStepForTrace.index } : {}),
+                  ...(runningStepForTrace?.role?.trim()
+                      ? { orchestrationRole: runningStepForTrace.role.trim() }
+                      : {}),
+              }
+            : {}),
+    };
     await emitTrace(traceBase, "session.start", {
         meta: {
             textLength: userText.length,
@@ -275,14 +310,14 @@ export async function handleUnifiedChat(
     let replyText = "";
     try {
         // 调用 Agent 引擎，它会根据 messages 和 toolSchemas 决定是说话还是调工具
-        replyText = await runAgent(messages, getAllTools(), {
+        replyText = await runAgent(messages, {
             toolSchemas,
             executeTool: async (toolName, args) => {
                 const resolved = await registry.resolveByName(toolName, toolExecutionCtx, {
                     health: providerHealth,
                 });
                 if (taskId && appConfig.m2StepToolEnforcement) {
-                    const runningStep = await getRunningPlanStep(taskId);
+                    const runningStep = runningStepForTrace;
 
                     // fail-closed：没有 running step 直接拒绝（返回文案，避免抛错中断整轮对话）
                     if (!runningStep) {
@@ -333,7 +368,13 @@ export async function handleUnifiedChat(
         // 将结果发回前端
         await sendOutbound({
             text: replyText,
-            metadata: { traceId, agentId, profileId, taskId },
+            metadata: {
+                traceId,
+                agentId,
+                profileId,
+                taskId,
+                decisionSource,
+            },
         });
 
         // 如果关联了任务，且允许更新，则在时间线上记一笔

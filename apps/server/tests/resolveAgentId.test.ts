@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { resolveAgentId } from "@/agent/agentRegistry";
+import { resolveAgentId, resolveEffectiveAgent } from "@/agent/agentRegistry";
 import type { UnifiedInboundMessage } from "@/channels/unifiedMessage";
+import type { PlanStep } from "@/tasks/collaborationTypes";
 
 /**
  * 【测试工厂函数】：inbound
@@ -42,5 +43,50 @@ describe("resolveAgentId", () => {
         // 验证：系统的容错与兜底能力。
         // 既没有指令，也没有特殊意图，就走最基础的聊天逻辑。
         expect(resolveAgentId(inbound({ text: "普通聊天" }))).toBe("main");
+    });
+});
+
+function runningStep(p: Partial<PlanStep> & Pick<PlanStep, "index" | "title" | "intent">): PlanStep {
+    return {
+        status: "running",
+        ...p,
+    };
+}
+
+describe("resolveEffectiveAgent（任务步 assignedAgentId / agentLocked）", () => {
+    it("当前 running 步有 assignedAgentId 时优先于用户下拉框中的 agentId", () => {
+        const step = runningStep({
+            index: 0,
+            title: "评审",
+            intent: "做代码评审",
+            assignedAgentId: "code_review",
+        });
+        const r = resolveEffectiveAgent(
+            inbound({ agentId: "daily_report", text: "看下这段代码" }),
+            step,
+        );
+        expect(r.agentId).toBe("code_review");
+        expect(r.decisionSource).toBe("plan_step");
+    });
+
+    it("agentLocked 且显式 agentId 时不再被计划步覆盖", () => {
+        const step = runningStep({
+            index: 0,
+            title: "评审",
+            intent: "做代码评审",
+            assignedAgentId: "code_review",
+        });
+        const r = resolveEffectiveAgent(
+            inbound({ agentId: "daily_report", agentLocked: true, text: "坚持要用日报助手" }),
+            step,
+        );
+        expect(r.agentId).toBe("daily_report");
+        expect(r.decisionSource).toBe("user");
+    });
+
+    it("无任务步或无 assignedAgentId 时行为与 resolveAgentId 一致", () => {
+        expect(
+            resolveEffectiveAgent(inbound({ text: "普通聊天" }), null).agentId,
+        ).toBe("main");
     });
 });

@@ -112,7 +112,16 @@ export function WorkspacePage() {
         setError(null);
         setOk(null);
         try {
-            const parsed = JSON.parse(fileAccessJson) as unknown;
+            let parsed: unknown;
+            try {
+                parsed = JSON.parse(fileAccessJson) as unknown;
+            } catch (parseErr) {
+                if (parseErr instanceof SyntaxError) {
+                    setError(t("workspace.fileAccessJsonSyntaxError"));
+                    return;
+                }
+                throw parseErr;
+            }
             if (!parsed || typeof parsed !== "object") {
                 setError(t("workspace.needFileAccessJson"));
                 return;

@@ -15,7 +15,6 @@ import type {
 } from "@/llm/providers/ModelProvider";
 import { chatWithModelWithTools } from "@/llm/model";
 import { getTool, getToolSchemas } from "./tools/index";
-import type { Tool } from "./types";
 import type { ToolGuardResult } from "@/security/toolGuard";
 import { normalizeToolGuardResult } from "@/security/toolGuard";
 
@@ -99,15 +98,12 @@ export interface RunAgentOptions {
 
 /**
  * runAgent: 执行 Agent 任务的核心入口
- * 
+ *
  * @param messages 初始对话历史
- * @param _tools (占位参数) 兼容性工具列表
- * @param options 控制参数
- * @returns 最终 LLM 生成的回复字符串
+ * @param options 控制参数（工具 schema、executeTool、guard 等）
  */
 export async function runAgent(
     messages: ChatMessage[],
-    _tools: Tool[],
     options?: RunAgentOptions
 ): Promise<string> {
     const maxRounds = options?.maxToolRounds ?? MAX_TOOL_ROUNDS;

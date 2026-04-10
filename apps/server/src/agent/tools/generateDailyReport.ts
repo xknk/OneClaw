@@ -13,6 +13,7 @@ export function generateDailyReportTool(): Tool {
     return {
         // 工具的唯一标识符，AI 会根据这个名字来决定调用哪个工具
         name: "generate_daily_report",
+        riskLevel: "medium",
 
         // 工具的描述信息，这是给 AI 看的“说明书”
         // AI 靠这段文字理解：什么时候该用这个工具，它能干什么

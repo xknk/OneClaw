@@ -3,6 +3,7 @@
  * 目的：解耦 渠道层 (Channels) 与 逻辑层 (Agent/Gateway)。
  * 无论前端是 Web、APP 还是第三方平台，逻辑层只处理统一后的消息。
  */
+import type { TraceDecisionSource } from "@/observability/traceTypes";
 /**
  * 统一的业务意图类型
  * 用于标识用户想做什么：普通聊天、生成日报、代码评审
@@ -45,6 +46,14 @@ export interface UnifiedInboundMessage {
   * 用于 V4 版本的工作流追踪。若存在，AI 的响应会记录到该任务的生命周期中。
   */
     taskId?: string;
+    /**
+     * 路由/编排决策来源（可选）。未传时由服务端根据是否显式 agentId 等推断。
+     */
+    decisionSource?: TraceDecisionSource;
+    /**
+     * 为 true 时，后续路由/分类器不应覆盖用户显式的 agentId（需编排层配合）。
+     */
+    agentLocked?: boolean;
 }
 
 /**
@@ -81,6 +90,8 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
         agentId?: unknown; // 执行任务的 Agent ID   
         intent?: unknown; // 用户意图
         taskId?: unknown; //任务关联ID
+        decisionSource?: unknown;
+        agentLocked?: unknown;
     };
 
     // 2. 核心字段校验：消息内容必须是字符串
@@ -115,7 +126,10 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
         typeof anyBody.taskId === "string" && anyBody.taskId.trim() !== ""
             ? anyBody.taskId.trim()
             : undefined;
-            
+
+    const decisionSource = parseDecisionSourceFromBody(anyBody.decisionSource);
+    const agentLocked = anyBody.agentLocked === true;
+
     // 7. 组装并返回标准结构
     return {
         channelId: "webchat",
@@ -126,5 +140,23 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
         agentId,
         intent,
         taskId,
+        ...(decisionSource ? { decisionSource } : {}),
+        ...(agentLocked ? { agentLocked: true } : {}),
     };
+}
+
+const DECISION_SOURCE_VALUES = new Set<TraceDecisionSource>([
+    "rule",
+    "classifier",
+    "supervisor",
+    "user",
+    "binding",
+    "default",
+    "plan_step",
+]);
+
+function parseDecisionSourceFromBody(v: unknown): TraceDecisionSource | undefined {
+    if (typeof v !== "string") return undefined;
+    const s = v.trim() as TraceDecisionSource;
+    return DECISION_SOURCE_VALUES.has(s) ? s : undefined;
 }

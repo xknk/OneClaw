@@ -1,22 +1,10 @@
-import { getTool, getToolSchemas } from "@/agent/tools"; // 导入底层工具的具体实现和描述文件
+import { getBuiltinToolRiskLevel, getTool, getToolSchemas } from "@/agent/tools"; // 导入底层工具的具体实现和描述文件
 import type {
     ToolDefinition,
     ToolExecutionContext,
     ToolExecutionResult,
     ToolProvider,
-    ToolRiskLevel,
 } from "../types";
-
-/**
- * 根据工具名称判断风险等级
- * @param name 工具名称
- * @returns 风险等级
- */
-function riskByName(name: string): ToolRiskLevel {
-    if (name === "exec" || name === "apply_patch" || name === "delete_file") return "high";
-    if (name === "generate_daily_report") return "medium";
-    return "low";
-}
 
 /**
  * 构建内置工具定义
@@ -24,7 +12,7 @@ function riskByName(name: string): ToolRiskLevel {
  * @returns 工具定义
  */
 function buildBuiltinDefinition(schema: (ReturnType<typeof getToolSchemas>)[number]): ToolDefinition {
-    const risk = riskByName(schema.name);
+    const risk = getBuiltinToolRiskLevel(schema.name);
     
     // 显式策略：不要依赖 executionService 默认值
     if (risk === "high") {

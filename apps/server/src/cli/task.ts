@@ -134,7 +134,7 @@ export function registerTaskCommands(program: Command): void {
 
     task
         .command("plan")
-        .description("提交 Planner 计划（覆盖 v4_plan）")
+        .description("提交 Planner 计划（覆盖 v4_plan；steps 可含 assignedAgentId、role、status）")
         .argument("[taskId]", "任务 ID")
         .argument("[file]", "JSON 文件路径")
         .option("-i, --id <taskId>", "任务 ID")

@@ -3,9 +3,13 @@
  * 核心逻辑：解耦“想、做、评”三个环节，通过元数据（Meta）持久化任务状态。
  */
 
+import type { TraceDecisionSource } from "@/observability/traceTypes";
+
 // 常量定义：用于在数据库或上下文对象中存取对应的 JSON 字符串
 export const META_PLAN_KEY = "v4_plan";            // 存储生成的计划
 export const META_LAST_REVIEW_KEY = "v4_last_review"; // 存储最近一次的审核结论
+/** 多 Agent 编排快照（交接、当前执行者、决策来源；与 trace 字段对齐） */
+export const META_ORCHESTRATION_KEY = "v4_orchestration";
 export const META_PENDING_APPROVAL_KEY = "v4_pending_approval"; // 存储待审批的高风险工具
 export const META_LAST_APPROVAL_KEY = "v4_last_approval"; // 存储最近一次的人工批准
 /** 已批准在本任务存续期内可重复调用的高风险工具名（至任务 done/failed/cancelled 清除） */
@@ -30,6 +34,24 @@ export interface TaskLastFailureContext {
     /** 与 failureReason 一致的简述，便于 meta 自描述 */
     errorBrief?: string;
 }
+
+/**
+ * 任务级编排元数据（持久化在 task.meta[META_ORCHESTRATION_KEY]）
+ * 供多角色协作、交接审计与回放；写入时机由编排层按需触发。
+ */
+export interface TaskOrchestrationMeta {
+    version: 1;
+    /** 与 trace.orchestrationId 一致，通常等于 taskId */
+    orchestrationId: string;
+    /** 当前承担执行的 Agent */
+    activeAgentId?: string;
+    /** 当前聚焦的步骤序号 */
+    activeStepIndex?: number;
+    /** 最近一次路由/交接的决策来源 */
+    lastDecisionSource?: TraceDecisionSource;
+    /** 最近一次交接时间 */
+    lastHandoffAt?: string;
+}
 /**
  * 单个步骤的状态枚举
  */
@@ -51,6 +73,10 @@ export interface PlanStep {
     risk?: "low" | "medium" | "high"; // 风险评估（高风险操作可能触发强制人工确认）
     allowedTools?: string[]; // 权限控制：限制此步骤只能调用哪些工具（如：["google_search"]）
     status?: PlanStepStatus; // 当前步骤的实时状态
+    /** 本步绑定的 Agent（多助手协作时由执行器解析；未填则沿用会话级 agentId） */
+    assignedAgentId?: string;
+    /** 本步在协作中的角色，与 trace.orchestrationRole 对齐 */
+    role?: string;
 }
 
 /**

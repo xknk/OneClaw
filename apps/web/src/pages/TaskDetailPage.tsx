@@ -15,6 +15,24 @@ import {
 } from "@/api/client";
 import type { TaskRecord, TaskStatus } from "@/api/types";
 
+function orchestrationMetaFromTask(task: TaskRecord): {
+    activeAgentId?: string;
+    activeStepIndex?: number;
+    lastDecisionSource?: string;
+    lastHandoffAt?: string;
+} | null {
+    const raw = task.meta?.v4_orchestration;
+    if (!raw || typeof raw !== "object" || raw === null) return null;
+    const o = raw as Record<string, unknown>;
+    if (o.version !== 1) return null;
+    return {
+        activeAgentId: typeof o.activeAgentId === "string" ? o.activeAgentId : undefined,
+        activeStepIndex: typeof o.activeStepIndex === "number" ? o.activeStepIndex : undefined,
+        lastDecisionSource: typeof o.lastDecisionSource === "string" ? o.lastDecisionSource : undefined,
+        lastHandoffAt: typeof o.lastHandoffAt === "string" ? o.lastHandoffAt : undefined,
+    };
+}
+
 function collectTraceIdsFromTask(task: TaskRecord): string[] {
     const seen = new Set<string>();
     const add = (v: unknown) => {
@@ -82,8 +100,26 @@ export function TaskDetailPage() {
     const defaultPlanJson = useMemo(
         () =>
             locale === "en"
-                ? '[{"index":0,"title":"Step","intent":"chat"}]'
-                : '[{"index":0,"title":"步骤","intent":"chat"}]',
+                ? `[
+  {
+    "index": 0,
+    "title": "Code review",
+    "intent": "Review the PR and list issues",
+    "assignedAgentId": "code_review",
+    "role": "worker",
+    "status": "running"
+  }
+]`
+                : `[
+  {
+    "index": 0,
+    "title": "代码评审",
+    "intent": "阅读变更并列出问题",
+    "assignedAgentId": "code_review",
+    "role": "worker",
+    "status": "running"
+  }
+]`,
         [locale],
     );
     const [task, setTask] = useState<TaskRecord | null>(null);
@@ -146,6 +182,10 @@ export function TaskDetailPage() {
 
     const traceIdsOnTask = useMemo(() => (task ? collectTraceIdsFromTask(task) : []), [task]);
     const planStepOpts = useMemo(() => (task ? planStepOptionsFromTask(task) : []), [task]);
+    const orchestrationMeta = useMemo(
+        () => (task ? orchestrationMetaFromTask(task) : null),
+        [task],
+    );
 
     /** 有计划步骤时，保证 step 下拉与当前索引一致 */
     useEffect(() => {
@@ -234,6 +274,36 @@ export function TaskDetailPage() {
                         {task.checkpoint.label ? ` · ${task.checkpoint.label}` : ""}
                         {task.checkpoint.at ? ` · ${formatDateTime(task.checkpoint.at, locale)}` : ""}
                     </p>
+                )}
+                {orchestrationMeta && (
+                    <div className="mt-3 rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 text-xs text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/50 dark:text-slate-400">
+                        <p className="font-medium text-slate-700 dark:text-slate-300">{t("task.orchestrationTitle")}</p>
+                        <ul className="mt-1 list-inside list-disc space-y-0.5">
+                            {orchestrationMeta.activeAgentId != null && (
+                                <li>
+                                    {t("task.orchestrationAgent")}:{" "}
+                                    <span className="font-mono">{orchestrationMeta.activeAgentId}</span>
+                                </li>
+                            )}
+                            {orchestrationMeta.activeStepIndex != null && (
+                                <li>
+                                    {t("task.orchestrationStep")}: {orchestrationMeta.activeStepIndex}
+                                </li>
+                            )}
+                            {orchestrationMeta.lastDecisionSource != null && (
+                                <li>
+                                    {t("task.orchestrationSource")}:{" "}
+                                    <span className="font-mono">{orchestrationMeta.lastDecisionSource}</span>
+                                </li>
+                            )}
+                            {orchestrationMeta.lastHandoffAt != null && (
+                                <li>
+                                    {t("task.orchestrationAt")}:{" "}
+                                    {formatDateTime(orchestrationMeta.lastHandoffAt, locale)}
+                                </li>
+                            )}
+                        </ul>
+                    </div>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                     <Button
@@ -507,6 +577,9 @@ export function TaskDetailPage() {
             <Card className="p-4">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.planner")}</h3>
                 <p className="text-xs text-slate-500">{t("task.plannerHint")}</p>
+                <p className="mt-2 text-xs leading-relaxed text-slate-500 dark:text-slate-500">
+                    {t("task.plannerOrchestrationHint")}
+                </p>
                 <TextArea
                     className="mt-3 font-mono text-xs"
                     value={planJson}

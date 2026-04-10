@@ -2,8 +2,14 @@
  * V4 M2：协作逻辑实现
  * 核心功能：计划的格式化与持久化、评审结论的校验与任务状态机触发。
  */
-import type { TaskPlan, PlanStep, ReviewVerdict } from "./collaborationTypes";
-import { META_LAST_REVIEW_KEY, META_PLAN_KEY, isTaskPlan } from "./collaborationTypes";
+import type { TraceDecisionSource } from "@/observability/traceTypes";
+import type { TaskPlan, PlanStep, ReviewVerdict, TaskOrchestrationMeta } from "./collaborationTypes";
+import {
+    META_LAST_REVIEW_KEY,
+    META_ORCHESTRATION_KEY,
+    META_PLAN_KEY,
+    isTaskPlan,
+} from "./collaborationTypes";
 import type { TaskRecord } from "./types";
 import { readTask, writeTask } from "./taskStore";
 import { transitionTask } from "./taskService";
@@ -44,6 +50,12 @@ function normalizeSteps(raw: unknown): PlanStep[] {
         }
         if (o.status === "pending" || o.status === "running" || o.status === "done" || o.status === "skipped") {
             step.status = o.status;
+        }
+        if (typeof o.assignedAgentId === "string" && o.assignedAgentId.trim() !== "") {
+            step.assignedAgentId = o.assignedAgentId.trim();
+        }
+        if (typeof o.role === "string" && o.role.trim() !== "") {
+            step.role = o.role.trim();
         }
         out.push(step);
     }
@@ -160,10 +172,50 @@ export async function submitReviewVerdict(taskId: string, input: SubmitReviewBod
     });
 }
 
+/**
+ * 更新任务级编排快照（当前执行 Agent、步骤、决策来源），供多 Agent 协作审计与回放。
+ */
+export async function updateTaskOrchestrationSnapshot(
+    taskId: string,
+    input: {
+        activeAgentId: string;
+        activeStepIndex?: number;
+        lastDecisionSource: TraceDecisionSource;
+    },
+    /** 若本对话轮次已持有最新 `TaskRecord`，传入可省一次 readTask */
+    baseRecord?: TaskRecord | null,
+): Promise<void> {
+    const cur = baseRecord ?? (await readTask(taskId.trim()));
+    if (!cur) return;
+
+    const at = nowIso();
+    const meta: TaskOrchestrationMeta = {
+        version: 1,
+        orchestrationId: taskId.trim(),
+        activeAgentId: input.activeAgentId,
+        activeStepIndex: input.activeStepIndex,
+        lastDecisionSource: input.lastDecisionSource,
+        lastHandoffAt: at,
+    };
+
+    await writeTask({
+        ...cur,
+        updatedAt: at,
+        meta: { ...(cur.meta ?? {}), [META_ORCHESTRATION_KEY]: meta },
+    });
+}
+
 /** 获取任务关联的计划 */
 export function getTaskPlanFromRecord(task: TaskRecord): TaskPlan | undefined {
     const raw = task.meta?.[META_PLAN_KEY];
     return isTaskPlan(raw) ? raw : undefined;
+}
+
+/** 从已加载的任务记录解析当前 `status === running` 的步骤（无磁盘 I/O） */
+export function getRunningPlanStepFromRecord(task: TaskRecord): PlanStep | null {
+    const plan = getTaskPlanFromRecord(task);
+    if (!plan?.steps?.length) return null;
+    return plan.steps.find((s) => s.status === "running") ?? null;
 }
 
 /** 获取任务最近的一次评审结论 */

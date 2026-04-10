@@ -32,6 +32,7 @@ export function createEmptyConversation(defaultTitle: string): Conversation {
         agentId: "main",
         intent: "",
         taskId: "",
+        agentLocked: false,
         updatedAt: new Date().toISOString(),
         messages: [],
     };

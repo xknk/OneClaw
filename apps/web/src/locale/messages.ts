@@ -85,6 +85,8 @@ const zh: Record<string, string> = {
     "chat.taskIdNone": "无",
     "chat.taskIdPick": "从最近任务选择",
     "chat.taskIdManual": "手动输入 taskId",
+    "chat.agentLocked": "锁定 Agent（不被任务计划步覆盖）",
+    "chat.agentLockedHint": "仅当填写了 taskId 时生效。若任务当前 running 步带有 assignedAgentId，默认会优先用该助手；勾选此项则强制使用你选的 agentId。",
     "chat.resetTopic": "重置话题",
     "chat.resetHint":
         "访客：重置后当前窗口清空，无历史。登录用户：重置后清空当前对话，侧栏仍保留该会话条目。",
@@ -172,6 +174,13 @@ const zh: Record<string, string> = {
     "task.addNote": "添加备注",
     "task.planner": "Planner 计划",
     "task.plannerHint": "POST /api/tasks/:id/plan · steps 为 JSON 数组",
+    "task.plannerOrchestrationHint":
+        "多 Agent：在步骤上可写 assignedAgentId（须在 agents.json 中存在）、role（如 worker）。当前 running 步会决定聊天轮次使用的 Agent；聊天里勾选「锁定 Agent」可强制使用你选的助手而不被计划覆盖。",
+    "task.orchestrationTitle": "编排快照（最近一轮对话）",
+    "task.orchestrationAgent": "当前 Agent",
+    "task.orchestrationStep": "步骤 index",
+    "task.orchestrationSource": "决策来源",
+    "task.orchestrationAt": "更新时间",
     "task.submitPlan": "提交计划",
     "task.reviewOutcomePass": "通过",
     "task.reviewOutcomeFail": "不通过",
@@ -217,6 +226,8 @@ const zh: Record<string, string> = {
     "workspace.fileAccessEnvLabel": "当前来自 .env 的条目（保存本页不会修改 .env）",
     "workspace.savedFileAccess": "已保存文件访问配置并重载。",
     "workspace.needFileAccessJson": "JSON 须包含 extraRoots、deniedPrefixes 两个字符串数组。",
+    "workspace.fileAccessJsonSyntaxError":
+        "JSON 格式有误。① extraRoots 等元素须为字符串数组，如 [\"D:\\\\\"] ，不能 [D:\\]。② pathRules 须为「对象」数组，如 [{ \"path\": \"D:\\\\\", \"access\": \"full\" }] ，不能写成 [\"path\": ...]。",
     "workspace.mcpTitle": "MCP 服务器",
     "workspace.mcpHint": "JSON 数组，项含 id、command、args、cwd、env、allowedToolNames、priority。保存后写入配置文件并刷新 MCP 客户端。",
     "workspace.tplTitle": "自定义任务模板",
@@ -327,6 +338,9 @@ const en: Record<string, string> = {
     "chat.taskIdNone": "None",
     "chat.taskIdPick": "Pick from recent tasks",
     "chat.taskIdManual": "Enter taskId manually",
+    "chat.agentLocked": "Lock agent (ignore plan step assignment)",
+    "chat.agentLockedHint":
+        "Only applies when taskId is set. If the running plan step has assignedAgentId, that agent is used by default; enable this to force your selected agentId.",
     "chat.resetTopic": "Reset topic",
     "chat.resetHint":
         "Guest: clears this window only. Signed-in: clears this chat; the sidebar entry remains.",
@@ -413,6 +427,13 @@ const en: Record<string, string> = {
     "task.addNote": "Add note",
     "task.planner": "Planner",
     "task.plannerHint": "POST /api/tasks/:id/plan · steps is a JSON array",
+    "task.plannerOrchestrationHint":
+        "Multi-agent: add assignedAgentId (must exist in agents.json) and role (e.g. worker) on steps. The running step picks the Agent for each chat round; in Chat, enable “Lock agent” to force your selected assistant instead of the plan.",
+    "task.orchestrationTitle": "Orchestration (last chat round)",
+    "task.orchestrationAgent": "Active agent",
+    "task.orchestrationStep": "Step index",
+    "task.orchestrationSource": "Decision source",
+    "task.orchestrationAt": "Updated at",
     "task.submitPlan": "Submit plan",
     "task.reviewOutcomePass": "Pass",
     "task.reviewOutcomeFail": "Fail",
@@ -461,6 +482,8 @@ const en: Record<string, string> = {
     "workspace.fileAccessEnvLabel": "Entries from .env only (saving this page does not edit .env)",
     "workspace.savedFileAccess": "File access config saved and policy reloaded.",
     "workspace.needFileAccessJson": "JSON must include extraRoots and deniedPrefixes as string arrays.",
+    "workspace.fileAccessJsonSyntaxError":
+        "Invalid JSON. (1) Use string arrays: [\"D:\\\\\"] not [D:\\]. (2) pathRules must be an array of objects: [{ \"path\": \"D:\\\\\", \"access\": \"full\" }], not [\"path\": ...].",
     "workspace.mcpTitle": "MCP servers",
     "workspace.mcpHint":
         "JSON array of objects with id, command, args, cwd, env, allowedToolNames, priority. Saves to file and refreshes MCP clients.",

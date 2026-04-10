@@ -27,6 +27,7 @@ export function ChatPage() {
     const [agentId, setAgentId] = useState("main");
     const [intent, setIntent] = useState("");
     const [taskId, setTaskId] = useState("");
+    const [agentLocked, setAgentLocked] = useState(false);
     const [input, setInput] = useState("");
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [loading, setLoading] = useState(false);
@@ -108,6 +109,7 @@ export function ChatPage() {
             setAgentId(first.agentId);
             setIntent(first.intent);
             setTaskId(first.taskId);
+            setAgentLocked(Boolean(first.agentLocked));
             prevActiveId.current = first.id;
         }
     }, [hasToken]);
@@ -129,6 +131,7 @@ export function ChatPage() {
         setAgentId(c.agentId);
         setIntent(c.intent);
         setTaskId(c.taskId);
+        setAgentLocked(Boolean(c.agentLocked));
     }, [activeId, conversations, hasToken]);
 
     useEffect(() => {
@@ -194,6 +197,9 @@ export function ChatPage() {
             if (taskId.trim()) {
                 body.taskId = taskId.trim();
             }
+            if (taskId.trim() && agentLocked) {
+                body.agentLocked = true;
+            }
             const { reply } = await apiChat(body);
             const asstMsg: ChatMessage = { role: "assistant", text: reply };
 
@@ -217,6 +223,7 @@ export function ChatPage() {
                         agentId: aid,
                         intent: intent.trim(),
                         taskId: taskId.trim(),
+                        agentLocked,
                         updatedAt: new Date().toISOString(),
                     };
                     const next = prev.map((c) => (c.id === activeId ? updated : c));
@@ -242,6 +249,7 @@ export function ChatPage() {
         loading,
         t,
         taskId,
+        agentLocked,
         userId,
     ]);
 
@@ -300,6 +308,7 @@ export function ChatPage() {
         setAgentId(c.agentId);
         setIntent(c.intent);
         setTaskId(c.taskId);
+        setAgentLocked(Boolean(c.agentLocked));
         setMobileHistoryOpen(false);
     };
 
@@ -333,6 +342,7 @@ export function ChatPage() {
                     setAgentId(first.agentId);
                     setIntent(first.intent);
                     setTaskId(first.taskId);
+                    setAgentLocked(Boolean(first.agentLocked));
                     prevActiveId.current = first.id;
                 } else {
                     const empty = createEmptyConversation(t("chat.newChat"));
@@ -342,6 +352,7 @@ export function ChatPage() {
                     setAgentId(empty.agentId);
                     setIntent(empty.intent);
                     setTaskId(empty.taskId);
+                    setAgentLocked(Boolean(empty.agentLocked));
                     prevActiveId.current = empty.id;
                 }
             }
@@ -372,9 +383,20 @@ export function ChatPage() {
         }
     };
     const patchTask = (v: string) => {
+        const nextLocked = v.trim() ? agentLocked : false;
         setTaskId(v);
+        if (!v.trim()) {
+            setAgentLocked(false);
+        }
         if (hasToken && activeId) {
-            patchActive({ taskId: v });
+            patchActive({ taskId: v, agentLocked: nextLocked });
+        }
+    };
+
+    const patchAgentLocked = (v: boolean) => {
+        setAgentLocked(v);
+        if (hasToken && activeId) {
+            patchActive({ agentLocked: v });
         }
     };
 
@@ -508,6 +530,21 @@ export function ChatPage() {
                                         placeholder="task-…"
                                     />
                                 )}
+                            </label>
+                            <label className="block text-[11px] text-slate-600 dark:text-slate-400 sm:col-span-2">
+                                <span
+                                    className={`flex cursor-pointer items-start gap-2 ${!taskIdTrim ? "opacity-50" : ""}`}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        className="mt-0.5"
+                                        checked={agentLocked}
+                                        disabled={!taskIdTrim}
+                                        onChange={(e) => patchAgentLocked(e.target.checked)}
+                                    />
+                                    <span>{t("chat.agentLocked")}</span>
+                                </span>
+                                <p className="mt-1 pl-6 text-slate-500 dark:text-slate-500">{t("chat.agentLockedHint")}</p>
                             </label>
                         </div>
                         <div className="mt-2">

@@ -57,7 +57,7 @@ describe("runAgent", () => {
             toolCalls: [],
         });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], { toolSchemas });
+        const out = await runAgent([{ role: "user", content: "hi" }], { toolSchemas });
 
         expect(out).toBe("最终回答");
         // 验证模型只被调用了 1 次（没有开启第二轮对话）
@@ -78,7 +78,7 @@ describe("runAgent", () => {
                 toolCalls: [],
             });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], { toolSchemas });
+        const out = await runAgent([{ role: "user", content: "hi" }], { toolSchemas });
 
         expect(out).toBe("已看到错误，改用文字说明。");
         // 核心检查：Agent 是否把“未知工具”的错误信息塞进了发给模型的第二轮上下文中
@@ -99,7 +99,7 @@ describe("runAgent", () => {
                 toolCalls: [],
             });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], { toolSchemas });
+        const out = await runAgent([{ role: "user", content: "hi" }], { toolSchemas });
 
         expect(out).toBe("收到异常，结束。");
         // 核心检查：工具执行时的 Error 对象是否被 catch 并在下一轮告知了模型
@@ -114,7 +114,7 @@ describe("runAgent", () => {
             toolCalls: [{ name: "echo", args: { text: "x" } }],
         });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+        const out = await runAgent([{ role: "user", content: "hi" }], {
             toolSchemas,
             maxToolRounds: 2, // 限制最多只跑 2 轮
         });
@@ -136,7 +136,7 @@ describe("runAgent", () => {
                 toolCalls: [],
             });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+        const out = await runAgent([{ role: "user", content: "hi" }], {
             toolSchemas,
             // 模拟权限守卫：直接返回拒绝理由
             toolGuard: () => "无权限：测试拒绝",
@@ -161,7 +161,7 @@ describe("runAgent", () => {
                 toolCalls: [],
             });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+        const out = await runAgent([{ role: "user", content: "hi" }], {
             toolSchemas,
             toolGuard: () => ({
                 allow: false as const,
@@ -186,7 +186,7 @@ describe("runAgent", () => {
                 toolCalls: [],
             });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+        const out = await runAgent([{ role: "user", content: "hi" }], {
             toolSchemas,
             executeTool: async () => {
                 throw new Error("provider boom");
@@ -209,7 +209,7 @@ describe("runAgent", () => {
                 toolCalls: [],
             });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+        const out = await runAgent([{ role: "user", content: "hi" }], {
             toolSchemas,
             executeTool: async () => {
                 throw new ToolPolicyError("NOT_IN_ALLOWLIST", "不在白名单", { toolName: "x" });
@@ -225,7 +225,7 @@ describe("runAgent", () => {
         vi.mocked(model.chatWithModelWithTools).mockRejectedValueOnce(new Error("ollama offline"));
 
         const events: { type: string; error?: string }[] = [];
-        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+        const out = await runAgent([{ role: "user", content: "hi" }], {
             toolSchemas,
             onModelEvent: (e) => {
                 if (e.type === "llm.error") events.push({ type: e.type, error: e.error });
@@ -248,7 +248,7 @@ describe("runAgent", () => {
                 toolCalls: [],
             });
 
-        const out = await runAgent([{ role: "user", content: "hi" }], [], {
+        const out = await runAgent([{ role: "user", content: "hi" }], {
             toolSchemas,
             toolGuard: () => {
                 throw new Error("policy bug");

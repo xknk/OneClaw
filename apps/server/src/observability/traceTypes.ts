@@ -1,4 +1,26 @@
 /**
+ * 路由/编排决策来源（多 Agent、意图分类、Supervisor 等与 trace 对齐）
+ */
+export type TraceDecisionSource =
+    | "rule"
+    | "classifier"
+    | "supervisor"
+    | "user"
+    | "binding"
+    | "default"
+    /** 任务计划当前 running 步的 assignedAgentId */
+    | "plan_step";
+
+/**
+ * 协作中的角色（与任务 PlanStep.role、trace 对齐；可扩展自定义字符串）
+ */
+export type TraceOrchestrationRole =
+    | "planner"
+    | "worker"
+    | "reviewer"
+    | "supervisor";
+
+/**
  * 追踪事件类型
  * 定义了 AI Agent 生命周期中的关键观测点
  */
@@ -38,6 +60,16 @@ export interface TraceEvent {
     channelId?: string;
     /** 最终用户 ID */
     profileId?: string;
+
+    // --- 多 Agent / 编排（可选；用于串联 Supervisor、分步任务、审计）---
+    /** 一次编排实例 ID，任务场景可与 taskId 一致 */
+    orchestrationId?: string;
+    /** 当前计划步骤序号（与 TaskPlan.steps[].index 对齐） */
+    stepIndex?: number;
+    /** 当前步骤承担的角色 */
+    orchestrationRole?: TraceOrchestrationRole | string;
+    /** 本次生效 Agent 的路由/编排决策来源 */
+    decisionSource?: TraceDecisionSource;
 
     // --- 工具调用相关字段 (仅在 tool.* 相关事件中存在) ---
     /** 工具的名称，如 "get_weather" */

@@ -1,5 +1,5 @@
 import { appendTraceEvent } from "./traceWriter"; // 导入负责 IO 写入的方法
-import type { TraceEvent, TraceEventType } from "./traceTypes"; // 导入类型定义
+import type { TraceDecisionSource, TraceEvent, TraceEventType } from "./traceTypes"; // 导入类型定义
 
 /**
  * 追踪基础上下文接口
@@ -11,6 +11,14 @@ export interface TraceBase {
     agentId: string;    // 执行任务的智能体 ID
     channelId: string;  // 访问渠道（Web/API 等）
     profileId: string;  // 最终用户的身份 ID
+    /** 编排实例 ID（如与 taskId 对齐） */
+    orchestrationId?: string;
+    /** 当前计划步骤序号 */
+    stepIndex?: number;
+    /** 当前步骤角色 */
+    orchestrationRole?: string;
+    /** 路由/编排决策来源 */
+    decisionSource?: TraceDecisionSource;
 }
 
 /**
@@ -39,6 +47,10 @@ export async function emitTrace(
         agentId: base.agentId,
         channelId: base.channelId,
         profileId: base.profileId,
+        orchestrationId: base.orchestrationId,
+        stepIndex: base.stepIndex,
+        orchestrationRole: base.orchestrationRole,
+        decisionSource: base.decisionSource,
 
         // --- 合并 patch 传入的额外信息 ---
         // 例如：durationMs, toolName, ok, errorCode 等

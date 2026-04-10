@@ -4,6 +4,7 @@
 
 import type { Tool } from "../types";
 import type { ToolSchema } from "../../llm/providers/ModelProvider";
+import type { ToolRiskLevel } from "../../tools/types";
 import { deleteFileInWorkspace, readFileInWorkspace, searchInWorkspace } from "./workspace";
 import { applyPatch } from "./applyPatch";
 import { controlledExec } from "./controlledExec";
@@ -70,6 +71,7 @@ function searchFiles(): Tool {
 function deleteFile(): Tool {
     return {
         name: "delete_file",
+        riskLevel: "high",
         description:
             "删除允许范围内的文件（需路径级 full 权限）。path 为相对主 workspace 或允许根下的绝对路径；目录删除请用 exec（若允许）",
         async execute(args) {
@@ -87,6 +89,7 @@ function deleteFile(): Tool {
 function applyPatchTool(): Tool {
     return {
         name: "apply_patch",
+        riskLevel: "high",
         description:
             "写入或追加文件。path 相对主 workspace 或允许根下的绝对路径；content 为内容；mode 可选 replace|append",
         async execute(args) {
@@ -107,6 +110,7 @@ function applyPatchTool(): Tool {
 function execTool(): Tool {
     return {
         name: "exec",
+        riskLevel: "high",
         description: "在服务器上执行一条 shell 命令，有超时和输出长度限制。command 为要执行的命令字符串（如 dir、dir /a）",
         async execute(args) {
             const command = args?.command;
@@ -144,10 +148,6 @@ const toolMap = new Map<string, Tool>(tools.map((t) => [t.name, t]));
 
 export function getTool(name: string): Tool | undefined {
     return toolMap.get(name) ?? getRuntimeSkillTool(name);
-}
-
-export function getAllTools(): Tool[] {
-    return tools;
 }
 
 export function getToolSchemas(): ToolSchema[] {
@@ -231,6 +231,11 @@ export function getToolSchemas(): ToolSchema[] {
             },
         },
     ];
+}
+
+/** 供 builtinProvider：风险与 Tool 定义同处维护 */
+export function getBuiltinToolRiskLevel(name: string): ToolRiskLevel {
+    return toolMap.get(name)?.riskLevel ?? "low";
 }
 
 export function getToolDescriptions(): string {

@@ -1,6 +1,8 @@
 // src/agent/agentResolver.ts
 
 import type { UnifiedInboundMessage, UnifiedIntent } from "@/channels/unifiedMessage";
+import type { TraceDecisionSource } from "@/observability/traceTypes";
+import type { PlanStep } from "@/tasks/collaborationTypes";
 import {
     getAgentBindings,
     getAgentConfigById,
@@ -93,25 +95,75 @@ export function normalizeTextForAgent(agentId: string, raw: string): string {
     return text;
 }
 
+/** 与 resolveAgentId 各分支对应，便于 trace / 编排归因 */
+export type AgentResolveSource = "user" | "intent" | "binding" | "default";
+
+/**
+ * 解析 Agent，并附带决策分支（不改变 resolveAgentId 的语义）
+ */
+export function resolveAgentIdWithSource(inbound: UnifiedInboundMessage): {
+    agentId: AgentId;
+    source: AgentResolveSource;
+} {
+    if (typeof inbound.agentId === "string" && inbound.agentId.trim()) {
+        const id = inbound.agentId.trim();
+        return { agentId: (getAgentConfigById(id)?.id ?? "main") as AgentId, source: "user" };
+    }
+
+    const intent = normalizeIntent(inbound.intent);
+    if (intent === "daily_report") return { agentId: "daily_report", source: "intent" };
+    if (intent === "code_review") return { agentId: "code_review", source: "intent" };
+
+    const byBinding = matchBinding(inbound);
+    if (byBinding) {
+        return { agentId: (getAgentConfigById(byBinding)?.id ?? "main") as AgentId, source: "binding" };
+    }
+
+    return { agentId: "main", source: "default" };
+}
+
+function mapResolveSourceToTrace(s: AgentResolveSource): TraceDecisionSource {
+    if (s === "user") return "user";
+    if (s === "binding") return "binding";
+    return "default";
+}
+
+/**
+ * 多 Agent 协作入口：在任务场景下优先采用「当前 running 步」的 assignedAgentId；
+ * agentLocked 为 true 且用户显式传了 agentId 时，不覆盖用户选择。
+ */
+export function resolveEffectiveAgent(
+    inbound: UnifiedInboundMessage,
+    runningStep: PlanStep | null | undefined,
+): { agentId: AgentId; decisionSource: TraceDecisionSource } {
+    const explicit =
+        typeof inbound.agentId === "string" && inbound.agentId.trim() !== ""
+            ? inbound.agentId.trim()
+            : undefined;
+
+    if (inbound.agentLocked && explicit) {
+        const id = getAgentConfigById(explicit)?.id ?? "main";
+        return { agentId: id as AgentId, decisionSource: "user" };
+    }
+
+    const stepAgent = runningStep?.assignedAgentId?.trim();
+    if (stepAgent) {
+        const cfg = getAgentConfigById(stepAgent);
+        if (cfg) {
+            return { agentId: cfg.id as AgentId, decisionSource: "plan_step" };
+        }
+    }
+
+    const { agentId, source } = resolveAgentIdWithSource(inbound);
+    if (inbound.decisionSource) {
+        return { agentId, decisionSource: inbound.decisionSource };
+    }
+    return { agentId, decisionSource: mapResolveSourceToTrace(source) };
+}
+
 /**
  * [决策中心] 决定该由哪个 Agent 响应当前的输入消息
  */
 export function resolveAgentId(inbound: UnifiedInboundMessage): AgentId {
-    // 1) 显式指定：如果消息对象中已经带了 agentId（如前端下拉框选择），直接信任
-    if (typeof inbound.agentId === "string" && inbound.agentId.trim()) {
-        const id = inbound.agentId.trim();
-        return (getAgentConfigById(id)?.id ?? "main") as AgentId;
-    }
-
-    // 2) 意图识别：如果上游 NLP 模块已经识别出了 Intent
-    const intent = normalizeIntent(inbound.intent);
-    if (intent === "daily_report") return "daily_report";
-    if (intent === "code_review") return "code_review";
-
-    // 3) 规则绑定：根据 agents.json 中的 bindings 配置进行匹配
-    const byBinding = matchBinding(inbound);
-    if (byBinding) return (getAgentConfigById(byBinding)?.id ?? "main") as AgentId;
-
-    // 4) 默认值：实在找不到就用 main
-    return "main";
+    return resolveAgentIdWithSource(inbound).agentId;
 }

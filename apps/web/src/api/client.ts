@@ -80,6 +80,8 @@ export async function apiChat(body: {
     agentId?: string;
     intent?: string;
     taskId?: string;
+    /** 与任务联用时：为 true 则优先使用下方 agentId，不被计划步 assignedAgentId 覆盖 */
+    agentLocked?: boolean;
 }): Promise<{ reply: string }> {
     return apiJson<{ reply: string }>("/api/chat", {
         method: "POST",
