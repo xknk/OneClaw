@@ -182,7 +182,7 @@ export async function generateDailyReport(
 
     // 2. 确定输出路径
     const outputPath = input.outputPath?.trim() || `reports/daily-${date}.md`;
-    const absPath = resolveInWorkspace(outputPath);
+    const absPath = resolveInWorkspace(outputPath, "write");
 
     // 3. 渲染 Markdown 并写入文件
     const markdown = renderMarkdown(date, filtered, input.sessionKey, input.agentId);

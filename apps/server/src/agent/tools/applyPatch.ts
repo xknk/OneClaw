@@ -1,11 +1,11 @@
 /**
- * 在 workspace 内写入文件（MVP：最小可行性产品实现）
- * 功能：支持整文件替换或在末尾追加内容，默认仅限 workspace 内部操作
+ * 在允许的文件访问根内写入（MVP）
+ * 支持整文件替换或追加；路径规则见 workspace.ts 与 fileAccessPolicy
  */
 
 import fs from "fs/promises";
 import path from "path";
-import { resolveInWorkspace, getUserWorkspaceRoot } from "./workspace";
+import { resolveInWorkspace } from "./workspace";
 
 // 定义写入模式：replace (替换/覆盖), append (追加)
 export type ApplyPatchMode = "replace" | "append";
@@ -25,23 +25,14 @@ export interface ApplyPatchOptions {
 export async function applyPatch(options: ApplyPatchOptions): Promise<string> {
   const { path: relativePath, content, mode = "replace" } = options;
   
-  // 1. 解析绝对路径并执行初步安全校验
-  const fullPath = resolveInWorkspace(relativePath);
-  const root = getUserWorkspaceRoot();
-  
-  // 如果想写文件白名单，可在此处写
-  
-  // 2. 二次校验：确保最终生成的路径绝对不会越出工作区根目录
-  if (!fullPath.startsWith(root)) {
-    throw new Error("apply_patch 仅允许在 workspace 内写入");
-  }
+  const fullPath = resolveInWorkspace(relativePath, "write");
 
-  // 3. 自动创建父级目录
+  // 自动创建父级目录
   // 例如写入 'a/b/c.txt'，如果文件夹 'a' 或 'b' 不存在，则递归创建它们
   const dir = path.dirname(fullPath);
   await fs.mkdir(dir, { recursive: true });
 
-  // 4. 根据模式执行写入
+  // 根据模式执行写入
   if (mode === "append") {
     // 追加模式：将内容添加到文件末尾
     await fs.appendFile(fullPath, content, "utf-8");

@@ -13,7 +13,7 @@ import type {
  * @returns 风险等级
  */
 function riskByName(name: string): ToolRiskLevel {
-    if (name === "exec" || name === "apply_patch") return "high";
+    if (name === "exec" || name === "apply_patch" || name === "delete_file") return "high";
     if (name === "generate_daily_report") return "medium";
     return "low";
 }

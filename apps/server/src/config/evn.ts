@@ -75,7 +75,7 @@ export const ollamaConfig = {
 
 export type OllamaConfig = typeof ollamaConfig;
 const _DataDir = str("ONECLAW_DATA_DIR", path.join(os.homedir(), ".oneclaw"));
-// 在文件末尾、ollamaConfig 导出之后增加：
+const _userWorkspaceDirStr = str("ONECLAW_USER_WORKSPACE_DIR", path.join(_DataDir, "workspace"));
 export const appConfig = {
     dataDir: _DataDir,
     /** 发给模型的最大消息条数（只保留最近 N 条），避免超出 context 限制 */
@@ -95,11 +95,8 @@ export const appConfig = {
         "ONECLAW_SKILLS_DIR",
         path.join(str("ONECLAW_PROJECT_ROOT_DIR", _workspaceRoot), "workspace")
     ),
-    /** 用户工作目录路径 */
-    userWorkspaceDir: str(
-        "ONECLAW_USER_WORKSPACE_DIR",
-        path.join(_DataDir, "workspace")
-    ),
+    /** 用户工作目录路径（主 workspace；相对路径工具参数仍以此为基准） */
+    userWorkspaceDir: _userWorkspaceDirStr,
     /** exec 工具：超时（毫秒） */
     execTimeoutMs: num("ONECLAW_EXEC_TIMEOUT_MS", 30_000),
     /** exec 工具：stdout+stderr 最大字符数 */

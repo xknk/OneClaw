@@ -5,9 +5,11 @@
  */
 import { createServer } from "./createServer";
 import { PORT, appConfig } from "@/config/evn";
+import { ensureFileAccessPolicyReady } from "@/config/fileAccessPolicy";
 import { loadAgentRegistryFromWorkspace } from "@/agent/loadAgentRegistry";
 
 async function main() {
+    ensureFileAccessPolicyReady();
     await loadAgentRegistryFromWorkspace();
     const app = createServer();
     const host = appConfig.bindHost;

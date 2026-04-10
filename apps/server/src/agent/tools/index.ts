@@ -4,7 +4,7 @@
 
 import type { Tool } from "../types";
 import type { ToolSchema } from "../../llm/providers/ModelProvider";
-import { readFileInWorkspace, searchInWorkspace } from "./workspace";
+import { deleteFileInWorkspace, readFileInWorkspace, searchInWorkspace } from "./workspace";
 import { applyPatch } from "./applyPatch";
 import { controlledExec } from "./controlledExec";
 import { appConfig } from "../../config/evn";
@@ -35,7 +35,8 @@ function echo(): Tool {
 function readFile(): Tool {
     return {
         name: "read_file",
-        description: "读取 workspace 内文件内容。path 为相对 workspace 根的路径，如 src/index.ts",
+        description:
+            "读取允许范围内的文件。path 默认相对主 workspace；若配置了 ONECLAW_FILE_ACCESS_EXTRA_ROOTS 或 file-access.json，也可使用允许根下的绝对路径",
         async execute(args) {
             const path = args?.path;
             if (typeof path !== "string") return "缺少参数 path（字符串）";
@@ -51,7 +52,8 @@ function readFile(): Tool {
 function searchFiles(): Tool {
     return {
         name: "search_files",
-        description: "在 workspace 内搜索文件。glob 可选，如 *.ts；content 可选，只返回内容包含该字符串的文件路径",
+        description:
+            "在允许访问的根下搜索文件。glob 可选如 *.ts；多根时返回绝对路径。content 可选为内容子串",
         async execute(args) {
             const glob = typeof args?.glob === "string" ? args.glob : "**/*";
             const content = typeof args?.content === "string" ? args.content : undefined;
@@ -65,10 +67,28 @@ function searchFiles(): Tool {
     };
 }
 
+function deleteFile(): Tool {
+    return {
+        name: "delete_file",
+        description:
+            "删除允许范围内的文件（需路径级 full 权限）。path 为相对主 workspace 或允许根下的绝对路径；目录删除请用 exec（若允许）",
+        async execute(args) {
+            const p = args?.path;
+            if (typeof p !== "string") return "缺少参数 path（字符串）";
+            try {
+                return await deleteFileInWorkspace(p);
+            } catch (e) {
+                return `删除失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
 function applyPatchTool(): Tool {
     return {
         name: "apply_patch",
-        description: "在 workspace 内写入或追加文件（默认仅允许 workspace 内）。path 为相对路径，content 为内容，mode 可选 replace|append",
+        description:
+            "写入或追加文件。path 相对主 workspace 或允许根下的绝对路径；content 为内容；mode 可选 replace|append",
         async execute(args) {
             const path = args?.path;
             const content = args?.content;
@@ -115,6 +135,7 @@ const tools: Tool[] = [
     readFile(),
     searchFiles(),
     applyPatchTool(),
+    deleteFile(),
     execTool(),
     generateDailyReportTool(),
 ];
@@ -139,16 +160,19 @@ export function getToolSchemas(): ToolSchema[] {
         },
         {
             name: "read_file",
-            description: "读取 workspace 内文件内容。path 为相对 workspace 根的路径",
+            description:
+                "读取允许范围内的文件。path 可为相对主 workspace 的路径，或在配置额外根时为允许范围内的绝对路径",
             parameters: {
                 type: "object",
                 required: ["path"],
-                properties: { path: { type: "string", description: "相对路径，如 src/index.ts" } },
+                properties: {
+                    path: { type: "string", description: "如 src/index.ts，或配置多根后的绝对路径" },
+                },
             },
         },
         {
             name: "search_files",
-            description: "在 workspace 内搜索文件。glob 可选如 *.ts，content 可选为内容子串",
+            description: "在允许访问的根下搜索；多根时结果为绝对路径",
             parameters: {
                 type: "object",
                 properties: {
@@ -159,15 +183,24 @@ export function getToolSchemas(): ToolSchema[] {
         },
         {
             name: "apply_patch",
-            description: "在 workspace 内写入或追加文件。path 相对路径，content 内容，mode 可选 replace|append",
+            description: "写入或追加文件；path 相对主 workspace 或允许根下绝对路径",
             parameters: {
                 type: "object",
                 required: ["path", "content"],
                 properties: {
-                    path: { type: "string", description: "相对 workspace 的路径" },
+                    path: { type: "string", description: "相对路径或允许的绝对路径" },
                     content: { type: "string", description: "文件内容" },
                     mode: { type: "string", description: "replace 或 append" },
                 },
+            },
+        },
+        {
+            name: "delete_file",
+            description: "删除文件（需 file-access 中该路径为 full）。path 相对主 workspace 或允许的绝对路径",
+            parameters: {
+                type: "object",
+                required: ["path"],
+                properties: { path: { type: "string", description: "要删除的文件路径" } },
             },
         },
         {

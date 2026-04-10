@@ -14,8 +14,8 @@ import type { TaskRecord } from "./types";
 import { readTask, writeTask } from "./taskStore";
 import { transitionTask } from "./taskService";
 
-/** 定义哪些工具是高风险的：exec (执行 shell), apply_patch (修改文件) */
-const HIGH_RISK_TOOLS = new Set(["exec", "apply_patch"]);
+/** 定义哪些工具是高风险的：exec、apply_patch、delete_file */
+const HIGH_RISK_TOOLS = new Set(["exec", "apply_patch", "delete_file"]);
 
 /**
  * 判断工具是否需要任务风险审批

@@ -187,6 +187,17 @@ export function evaluateToolPermission(
         return { allow: true };
     }
 
+    if (toolName === "delete_file") {
+        if (!profile.allowWriteWorkspace) {
+            return deny("无权限：当前会话禁止删除 workspace 文件", "POLICY_DELETE_FORBIDDEN", pid);
+        }
+        const pathArg = typeof args?.path === "string" ? args.path : "";
+        if (!pathArg.trim()) return deny("参数错误：delete_file 需要 path", "POLICY_DELETE_PATH_REQUIRED");
+        const v = checkPathPolicy(pathArg, pOpt);
+        if (v) return deny(v.message, v.code, { ...v.meta, ...pid });
+        return { allow: true };
+    }
+
     if (toolName === "search_files") {
         if (!profile.allowReadWorkspace) {
             return deny("无权限：当前会话禁止读取 workspace", "POLICY_SEARCH_FORBIDDEN", pid);

@@ -196,10 +196,49 @@ export type WorkspacePaths = {
     taskTemplatesFile: string;
     agentsRegistryFile: string;
     skillsJsonDir: string;
+    fileAccessRoots: string[];
+    fileAccessDeniedPrefixes: string[];
+    fileAccessJsonPath: string;
 };
 
 export async function apiWorkspacePaths(): Promise<WorkspacePaths> {
     return apiJson<WorkspacePaths>("/api/workspace/paths");
+}
+
+export type FileAccessWorkspaceGet = {
+    filePath: string;
+    raw: string;
+    fileExists: boolean;
+    fromEnv: { extraRoots: string[]; deniedPrefixes: string[] };
+    json: {
+        extraRoots: string[];
+        deniedPrefixes: string[];
+        pathRules: { path: string; access: "read" | "write" | "full" }[];
+        defaultAccess: "read" | "write" | "full";
+    };
+    effective: {
+        roots: string[];
+        deniedPrefixes: string[];
+        defaultAccess: "read" | "write" | "full";
+        pathRules: { path: string; access: "read" | "write" | "full" }[];
+    };
+    hotReload: boolean;
+};
+
+export async function apiWorkspaceFileAccessGet(): Promise<FileAccessWorkspaceGet> {
+    return apiJson<FileAccessWorkspaceGet>("/api/workspace/file-access");
+}
+
+export async function apiWorkspaceFileAccessPut(body: {
+    extraRoots: string[];
+    deniedPrefixes: string[];
+    pathRules: { path: string; access: "read" | "write" | "full" }[];
+    defaultAccess: "read" | "write" | "full";
+}): Promise<{ ok: boolean; filePath: string }> {
+    return apiJson("/api/workspace/file-access", {
+        method: "PUT",
+        body: JSON.stringify(body),
+    });
 }
 
 export type McpWorkspaceGet = {

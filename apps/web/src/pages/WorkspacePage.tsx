@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
     apiWorkspacePaths,
+    apiWorkspaceFileAccessGet,
+    apiWorkspaceFileAccessPut,
     apiWorkspaceMcpGet,
     apiWorkspaceMcpPut,
     apiWorkspaceTaskTemplatesGet,
@@ -23,6 +25,10 @@ export function WorkspacePage() {
     const [error, setError] = useState<string | null>(null);
     const [ok, setOk] = useState<string | null>(null);
     const [pathsText, setPathsText] = useState("");
+    const [fileAccessJson, setFileAccessJson] = useState(
+        '{\n  "extraRoots": [],\n  "deniedPrefixes": [],\n  "pathRules": [],\n  "defaultAccess": "full"\n}\n',
+    );
+    const [fileAccessEnvText, setFileAccessEnvText] = useState("");
 
     const [mcpJson, setMcpJson] = useState("[]");
     const [tplJson, setTplJson] = useState("[]");
@@ -43,6 +49,10 @@ export function WorkspacePage() {
         try {
             const paths = await apiWorkspacePaths();
             setPathsText(JSON.stringify(paths, null, 2));
+
+            const fa = await apiWorkspaceFileAccessGet();
+            setFileAccessJson(fa.raw);
+            setFileAccessEnvText(JSON.stringify(fa.fromEnv, null, 2));
 
             const mcp = await apiWorkspaceMcpGet();
             setMcpJson(JSON.stringify(mcp.raw?.length ? mcp.raw : [], null, 2));
@@ -75,6 +85,68 @@ export function WorkspacePage() {
             setSkillName(name);
         } catch (e) {
             setError(e instanceof Error ? e.message : t("workspace.loadFail"));
+        }
+    };
+
+    const saveFileAccess = async () => {
+        setError(null);
+        setOk(null);
+        try {
+            const parsed = JSON.parse(fileAccessJson) as unknown;
+            if (!parsed || typeof parsed !== "object") {
+                setError(t("workspace.needFileAccessJson"));
+                return;
+            }
+            const extraRoots = (parsed as { extraRoots?: unknown }).extraRoots;
+            const deniedPrefixes = (parsed as { deniedPrefixes?: unknown }).deniedPrefixes;
+            const pathRulesRaw = (parsed as { pathRules?: unknown }).pathRules;
+            const defaultAccessRaw = (parsed as { defaultAccess?: unknown }).defaultAccess;
+            if (!Array.isArray(extraRoots) || !Array.isArray(deniedPrefixes)) {
+                setError(t("workspace.needFileAccessJson"));
+                return;
+            }
+            if (!extraRoots.every((x) => typeof x === "string") || !deniedPrefixes.every((x) => typeof x === "string")) {
+                setError(t("workspace.needFileAccessJson"));
+                return;
+            }
+            if (pathRulesRaw !== undefined && !Array.isArray(pathRulesRaw)) {
+                setError(t("workspace.needFileAccessJson"));
+                return;
+            }
+            const pathRules: { path: string; access: "read" | "write" | "full" }[] = [];
+            if (Array.isArray(pathRulesRaw)) {
+                for (const item of pathRulesRaw) {
+                    if (!item || typeof item !== "object") {
+                        setError(t("workspace.needFileAccessJson"));
+                        return;
+                    }
+                    const p = (item as { path?: unknown }).path;
+                    const a = (item as { access?: unknown }).access;
+                    if (typeof p !== "string" || (a !== "read" && a !== "write" && a !== "full")) {
+                        setError(t("workspace.needFileAccessJson"));
+                        return;
+                    }
+                    pathRules.push({ path: p, access: a });
+                }
+            }
+            let defaultAccess: "read" | "write" | "full" = "full";
+            if (defaultAccessRaw !== undefined) {
+                if (defaultAccessRaw !== "read" && defaultAccessRaw !== "write" && defaultAccessRaw !== "full") {
+                    setError(t("workspace.needFileAccessJson"));
+                    return;
+                }
+                defaultAccess = defaultAccessRaw;
+            }
+            await apiWorkspaceFileAccessPut({
+                extraRoots,
+                deniedPrefixes,
+                pathRules,
+                defaultAccess,
+            });
+            setOk(t("workspace.savedFileAccess"));
+            await loadAll();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : t("workspace.saveFail"));
         }
     };
 
@@ -188,6 +260,23 @@ export function WorkspacePage() {
                 <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/80 dark:text-slate-400">
                     {pathsText || "—"}
                 </pre>
+            </Card>
+
+            <Card className="p-4">
+                <h3 className="text-sm font-medium text-slate-800 dark:text-slate-200">{t("workspace.fileAccessTitle")}</h3>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-500">{t("workspace.fileAccessHint")}</p>
+                <p className="mt-2 text-xs font-medium text-slate-700 dark:text-slate-300">{t("workspace.fileAccessEnvLabel")}</p>
+                <pre className="mt-1 max-h-32 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/80 dark:text-slate-400">
+                    {fileAccessEnvText || "{}"}
+                </pre>
+                <TextArea
+                    className="mt-2 min-h-[200px] font-mono text-xs"
+                    value={fileAccessJson}
+                    onChange={(e) => setFileAccessJson(e.target.value)}
+                />
+                <Button type="button" className="mt-2" onClick={() => void saveFileAccess()}>
+                    {t("workspace.save")}
+                </Button>
             </Card>
 
             <Card className="p-4">

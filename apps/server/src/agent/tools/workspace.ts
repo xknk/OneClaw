@@ -1,48 +1,69 @@
 /**
- * workspace 内路径解析与只读操作（read / search）
- * 安全原则：所有路径限制在 workspace 根目录内，禁止 ../ 越界访问系统文件
+ * workspace 内路径解析与只读操作（read / search / delete）
+ * 安全原则：全局允许根 + 拒绝前缀 + pathRules 级别（read / write / full）
  */
 
 import fs from "fs/promises";
 import path from "path";
 import type { Dirent } from "fs";
 import { appConfig } from "../../config/evn";
+import {
+    assertPathOperationAllowed,
+    ensureFileAccessPolicyReady,
+    getFileAccessDeniedPrefixes as getPolicyDeniedPrefixes,
+    getFileAccessRoots as getPolicyRoots,
+    isPathGloballyAllowed,
+} from "../../config/fileAccessPolicy";
 
 /**
- * 获取经过解析的工作区绝对根路径
+ * 获取主 workspace 绝对根路径（相对路径仍解析到此根下）
  */
 export function getUserWorkspaceRoot(): string {
-    // path.resolve 会将配置中的路径转为标准绝对路径
     return path.resolve(appConfig.userWorkspaceDir);
 }
 
 /**
- * 将相对路径解析为绝对路径，并执行越界检查
- * @param relativePath 相对工作区根目录的路径
- * @throws 当路径指向工作区外部时抛出错误
+ * 所有允许的文件访问根（含主 workspace 与额外配置的根）
  */
-export function resolveInWorkspace(relativePath: string): string {
-    const root = getUserWorkspaceRoot();
-    // 结合根路径和相对路径。注意：path.resolve 会自动计算 ".." 
-    const resolved = path.resolve(root, relativePath);
-    
-    // 关键安全检查：解析后的绝对路径必须以工作区根路径开头
-    if (!resolved.startsWith(root)) {
-        throw new Error(`路径不允许越出 workspace: ${relativePath}`);
-    }
+export function getFileAccessRoots(): readonly string[] {
+    ensureFileAccessPolicyReady();
+    return getPolicyRoots();
+}
+
+/**
+ * 判断 candidate 是否落在 root 之下或与 root 相同（root 为已 resolve 的绝对路径）
+ */
+export function isPathInsideRoot(rootResolved: string, candidateResolved: string): boolean {
+    const root = path.resolve(rootResolved);
+    const cand = path.resolve(candidateResolved);
+    if (cand === root) return true;
+    const rel = path.relative(root, cand);
+    return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+/**
+ * 将相对路径解析为绝对路径（相对主 workspace），或接受已落在允许范围内的绝对路径
+ * @param purpose read=读/搜索；write=写入；delete=删除文件
+ */
+export function resolveInWorkspace(
+    relativeOrAbsolute: string,
+    purpose: "read" | "write" | "delete" = "read",
+): string {
+    const primary = getUserWorkspaceRoot();
+    const resolved = path.isAbsolute(relativeOrAbsolute)
+        ? path.resolve(relativeOrAbsolute)
+        : path.resolve(primary, relativeOrAbsolute);
+    assertPathOperationAllowed(resolved, relativeOrAbsolute, purpose);
     return resolved;
 }
 
 /**
  * 读取工作区内文件内容
- * @param relativePath 相对路径
- * @returns 文件 UTF-8 字符串内容
  */
 export async function readFileInWorkspace(relativePath: string): Promise<string> {
-    const fullPath = resolveInWorkspace(relativePath);
+    const fullPath = resolveInWorkspace(relativePath, "read");
     const stat = await fs.stat(fullPath);
-    
-    // 确保读取的是文件而不是目录
+
     if (!stat.isFile()) {
         throw new Error(`不是文件: ${relativePath}`);
     }
@@ -50,79 +71,83 @@ export async function readFileInWorkspace(relativePath: string): Promise<string>
 }
 
 /**
+ * 删除工作区内文件（需路径级 full 权限）
+ */
+export async function deleteFileInWorkspace(relativePath: string): Promise<string> {
+    const fullPath = resolveInWorkspace(relativePath, "delete");
+    await fs.unlink(fullPath);
+    return `已删除 ${relativePath}`;
+}
+
+function shouldSkipDirForWalk(absDir: string): boolean {
+    return getPolicyDeniedPrefixes().some((d) => isPathInsideRoot(d, absDir));
+}
+
+/**
  * 在工作区内搜索文件（支持文件名匹配和内容关键字匹配）
- * @param glob 匹配模式，如 "*.ts"、"src/" 或 "**//*" (全部)
- * @param contentSubstring 选填，若提供则执行全文检索，仅返回包含该字符串的文件
+ * 多根时结果为绝对路径；单根时仍为相对主 workspace 的路径
  */
 export async function searchInWorkspace(
     glob: string = "**/*",
     contentSubstring?: string
 ): Promise<string[]> {
-    const root = getUserWorkspaceRoot();
+    const roots = [...getPolicyRoots()];
+    const primary = getUserWorkspaceRoot();
+    const multiRoot = roots.length > 1;
     const results: string[] = [];
 
-    /**
-     * 内部递归遍历函数
-     * @param dir 当前遍历的绝对路径
-     * @param baseDir 工作区根路径（用于计算相对路径）
-     */
-    async function walk(dir: string, baseDir: string): Promise<void> {
+    async function walk(dir: string, walkRoot: string): Promise<void> {
+        const absDir = path.resolve(dir);
+        if (shouldSkipDirForWalk(absDir)) return;
+
         let entries: Dirent[];
         try {
-            // 读取目录，withFileTypes: true 可以直接获取类型，无需额外执行 stat
-            entries = await fs.readdir(dir, { withFileTypes: true });
+            entries = await fs.readdir(absDir, { withFileTypes: true });
         } catch {
-            // 如果目录不可读（如权限问题），静默跳过
             return;
         }
 
         for (const e of entries) {
-            const full = path.join(dir, e.name);
-            const rel = path.relative(baseDir, full); // 获取相对于工作区的路径
-            
+            const full = path.join(absDir, e.name);
             if (e.isDirectory()) {
-                // 如果是目录，递归向下遍历
-                await walk(full, baseDir);
+                await walk(full, walkRoot);
             } else if (e.isFile()) {
-                // 1. 首先检查文件名/路径是否符合 glob 规则
+                if (!isPathGloballyAllowed(full)) continue;
+
+                const rel = path.relative(walkRoot, full);
                 if (!glob || glob === "**/*" || matchSimpleGlob(rel, glob)) {
-                    // 2. 如果指定了内容关键字，则读取文件进行检索
                     if (contentSubstring) {
                         try {
                             const content = await fs.readFile(full, "utf-8");
                             if (content.includes(contentSubstring)) {
-                                results.push(rel);
+                                results.push(multiRoot ? full : rel);
                             }
                         } catch {
-                            // 失败通常是因为遇到大型二进制文件或编码问题，直接跳过
+                            // 二进制或编码问题
                         }
                     } else {
-                        // 仅匹配文件名成功，直接存入结果
-                        results.push(rel);
+                        results.push(multiRoot ? full : rel);
                     }
                 }
             }
         }
     }
 
-    await walk(root, root);
-    return results.sort(); // 返回排序后的路径列表
+    for (const root of roots) {
+        const r = path.resolve(root);
+        if (shouldSkipDirForWalk(r)) continue;
+        await walk(r, multiRoot ? r : primary);
+    }
+
+    return [...new Set(results)].sort();
 }
 
-/**
- * 极简版 Glob 匹配工具
- * @param filePath 相对于工作区的路径
- * @param pattern 匹配规则
- */
 function matchSimpleGlob(filePath: string, pattern: string): boolean {
-    // 模式为 "*"：只匹配根目录下的文件，不匹配子目录里的
     if (pattern === "*") return !filePath.includes(path.sep);
-    
-    // 模式为 "*.ext"：检查文件后缀
+
     if (pattern.startsWith("*.")) {
         return filePath.endsWith(pattern.slice(1));
     }
-    
-    // 默认行为：简单的包含匹配
+
     return filePath.includes(pattern);
 }

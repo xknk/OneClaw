@@ -4,6 +4,7 @@ import { appConfig, ollamaConfig } from "@/config/evn";
 import { getAgentRegistryPath } from "@/agent/loadAgentRegistry";
 import { resolveMcpServersFilePathForAdmin } from "@/config/mcpConfig";
 import { getConfigDir, getTaskTemplatesFilePath } from "@/config/runtimePaths";
+import { getFileAccessDeniedPrefixes, getFileAccessRoots } from "@/config/fileAccessPolicy";
 
 export function slashMenuBar(locale: UiLocale): string {
     return locale === "en"
@@ -122,8 +123,14 @@ export function tuiWorkspaceLines(locale: UiLocale): string {
             `  skills (*.json)  → ${path.resolve(skills)}`,
             `  agents registry  → ${path.resolve(agents)}`,
             `  user workspace   → ${path.resolve(appConfig.userWorkspaceDir)}`,
+            `  file access roots → ${getFileAccessRoots().map((r) => path.resolve(r)).join(" | ")}`,
+            ...(getFileAccessDeniedPrefixes().length
+                ? [
+                      `  file access deny → ${getFileAccessDeniedPrefixes().map((r) => path.resolve(r)).join(" | ")}`,
+                  ]
+                : []),
             "",
-            "Set ONECLAW_SKILLS_DIR / ONECLAW_DATA_DIR in .env to change roots.",
+            "Set ONECLAW_SKILLS_DIR / ONECLAW_DATA_DIR in .env to change roots; ONECLAW_FILE_ACCESS_EXTRA_ROOTS for more roots.",
         ].join("\n");
     }
     return [
@@ -135,8 +142,14 @@ export function tuiWorkspaceLines(locale: UiLocale): string {
         `  技能目录         → ${path.resolve(skills)}`,
         `  Agent 注册表     → ${path.resolve(agents)}`,
         `  用户工作目录     → ${path.resolve(appConfig.userWorkspaceDir)}`,
+        `  文件可访问根     → ${getFileAccessRoots().map((r) => path.resolve(r)).join(" | ")}`,
+        ...(getFileAccessDeniedPrefixes().length
+            ? [
+                  `  文件拒绝前缀     → ${getFileAccessDeniedPrefixes().map((r) => path.resolve(r)).join(" | ")}`,
+              ]
+            : []),
         "",
-        "可通过 .env 中 ONECLAW_SKILLS_DIR、ONECLAW_DATA_DIR 等调整根路径。",
+        "可通过 .env 中 ONECLAW_SKILLS_DIR、ONECLAW_DATA_DIR 调整路径；ONECLAW_FILE_ACCESS_EXTRA_ROOTS 增加可访问目录。",
     ].join("\n");
 }
 

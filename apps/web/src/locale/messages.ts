@@ -181,7 +181,7 @@ const zh: Record<string, string> = {
     "task.errSummary": "请填写 summary（评审说明）",
     "workspace.title": "工作区配置",
     "workspace.intro":
-        "在此编辑 MCP、任务模板、Skills、Agent 注册表，并管理网关会话。修改写入数据目录下配置文件；需具备网关访问权限（与对话相同的 WebChat 令牌）。",
+        "在此编辑 MCP、任务模板、Skills、Agent 注册表、文件访问范围（file-access.json），并管理网关会话。修改写入数据目录下配置文件；需具备网关访问权限（与对话相同的 WebChat 令牌）。",
     "workspace.reload": "重新加载",
     "workspace.loadFail": "加载失败",
     "workspace.saveFail": "保存失败",
@@ -196,6 +196,12 @@ const zh: Record<string, string> = {
     "workspace.needTplArray": "任务模板须为 JSON 数组（根级 templates 已自动包装）。",
     "workspace.pathsTitle": "目录与文件路径",
     "workspace.pathsHint": "供 TUI/手动编辑时对照；ONECLAW_SKILLS_DIR、ONECLAW_DATA_DIR 等在 .env 中配置。",
+    "workspace.fileAccessTitle": "文件访问范围（file-access.json）",
+    "workspace.fileAccessHint":
+        "pathRules：按路径前缀设定 read（仅读）、write（读写，不可删）或 full（含 delete_file）。defaultAccess 为未命中规则时的默认级别。保存后写入 JSON 并立即重载；与 .env 中的 ONECLAW_FILE_ACCESS_* 合并；亦可设 ONECLAW_FILE_ACCESS_DEFAULT。",
+    "workspace.fileAccessEnvLabel": "当前来自 .env 的条目（保存本页不会修改 .env）",
+    "workspace.savedFileAccess": "已保存文件访问配置并重载。",
+    "workspace.needFileAccessJson": "JSON 须包含 extraRoots、deniedPrefixes 两个字符串数组。",
     "workspace.mcpTitle": "MCP 服务器",
     "workspace.mcpHint": "JSON 数组，项含 id、command、args、cwd、env、allowedToolNames、priority。保存后写入配置文件并刷新 MCP 客户端。",
     "workspace.tplTitle": "自定义任务模板",
@@ -399,7 +405,7 @@ const en: Record<string, string> = {
     "task.errSummary": "Fill in summary (review text)",
     "workspace.title": "Workspace",
     "workspace.intro":
-        "Edit MCP, task templates, skills, and the agent registry; manage server-side sessions. Writes go to files under the data directory. Same WebChat token as chat is required.",
+        "Edit MCP, task templates, skills, the agent registry, and file access (file-access.json); manage server-side sessions. Writes go to files under the data directory. Same WebChat token as chat is required.",
     "workspace.reload": "Reload",
     "workspace.loadFail": "Load failed",
     "workspace.saveFail": "Save failed",
@@ -414,6 +420,12 @@ const en: Record<string, string> = {
     "workspace.needTplArray": "Task templates must be a JSON array (wrapped as templates on save).",
     "workspace.pathsTitle": "Paths",
     "workspace.pathsHint": "For TUI/manual editing; ONECLAW_SKILLS_DIR, ONECLAW_DATA_DIR, etc. are set in .env.",
+    "workspace.fileAccessTitle": "File access (file-access.json)",
+    "workspace.fileAccessHint":
+        "pathRules: longest-prefix match per path — read (read/search only), write (read + apply_patch, no delete), full (includes delete_file). defaultAccess applies when no rule matches. Saved JSON reloads immediately; merged with ONECLAW_FILE_ACCESS_* env; optional ONECLAW_FILE_ACCESS_DEFAULT.",
+    "workspace.fileAccessEnvLabel": "Entries from .env only (saving this page does not edit .env)",
+    "workspace.savedFileAccess": "File access config saved and policy reloaded.",
+    "workspace.needFileAccessJson": "JSON must include extraRoots and deniedPrefixes as string arrays.",
     "workspace.mcpTitle": "MCP servers",
     "workspace.mcpHint":
         "JSON array of objects with id, command, args, cwd, env, allowedToolNames, priority. Saves to file and refreshes MCP clients.",

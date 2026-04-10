@@ -6,6 +6,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { appConfig, ollamaConfig, PORT } from "../config/evn";
+import { getFileAccessDeniedPrefixes, getFileAccessRoots } from "../config/fileAccessPolicy";
 import { loadMcpServerConfigs } from "../config/mcpConfig";
 
 type Status = "ok" | "warn" | "fail";
@@ -51,6 +52,19 @@ export async function runDoctor(): Promise<void> {
         }
     } catch {
         line("fail", "Workspace 目录不存在", `运行 oneclaw onboard 或创建: ${appConfig.userWorkspaceDir}`);
+    }
+
+    const accessRoots = getFileAccessRoots();
+    const accessDenied = getFileAccessDeniedPrefixes();
+    if (accessRoots.length > 1) {
+        line(
+            "warn",
+            `已启用多文件访问根（${accessRoots.length} 个），read/search/apply_patch 可触及额外目录`,
+            "确认 ONECLAW_FILE_ACCESS_EXTRA_ROOTS / file-access.json 符合预期；敏感路径请用 ONECLAW_FILE_ACCESS_DENIED_PREFIXES"
+        );
+    }
+    if (accessDenied.length) {
+        line("ok", `文件访问拒绝前缀已配置 ${accessDenied.length} 条`);
     }
 
     // 4. AI 模型服务检查 (Ollama Check)

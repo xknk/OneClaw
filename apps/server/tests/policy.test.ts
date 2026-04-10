@@ -20,6 +20,7 @@ describe("checkToolPermission", () => {
         const c = ctx({ profileId: "readonly" });
         expect(checkToolPermission(c, "read_file", { path: "src/a.ts" })).toBeNull();
         expect(checkToolPermission(c, "apply_patch")).toMatch(/禁止写入/);
+        expect(checkToolPermission(c, "delete_file", { path: "src/a.ts" })).toMatch(/删除/);
         expect(checkToolPermission(c, "exec", { command: "npm run build" })).toMatch(/禁止执行/);
     });
 
