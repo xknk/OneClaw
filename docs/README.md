@@ -1,33 +1,20 @@
-# OneClaw 文档（精简索引）
+# OneClaw 文档
 
-日常只需要按顺序读下面 **4 份** 即可；历史 PRD、路线图原文在 [`archive/`](./archive/README.md)。
+日常阅读**三份主文档**即可；需要查旧版 PRD 原文或 M2 Runner 长文时，再打开第四份。
 
-| 步骤 | 文档 | 用途 |
+| 顺序 | 文档 | 读什么 |
 |:---:|:---|:---|
-| 1 | [使用说明](./user-guide.md) | 安装、启动、Trace、任务 API / CLI、环境变量 |
-| 2 | [安全配置与风险](./security-risks.md) | Profile、exec、MCP、审计与建议 |
-| 3 | [架构与扩展](./架构与扩展.md) | 模块边界、新增渠道 / Skill、条件启用技能 |
-| 4 | [进度与规划](./进度与规划.md) | **已完成 vs 未完成**、可选增强、V5 方向 |
+| 1 | [**用户指南**](./user-guide.md) | Monorepo 与 `.env` 位置；网关 / TUI / REPL；**环境变量表**（与 `appConfig` 对齐）；目录布局；WebChat 鉴权；**Trace 子命令**（`get` / `failed` / `slow` / `replay`）；任务 API 与 CLI；排障表 |
+| 2 | [**产品与交付**](./prd.md) | 术语表；MVP/V4/V5 摘要；**已完成 / 未完成 / 可选增强**；待办 |
+| 3 | [**开发与扩展**](./developer.md) | 模块边界；**Profile / Agent / MCP 三层叠加**；`enableWhen` 字段；`policy-overrides.json`；MCP 配置优先级；安全与代码路径 |
 
-### 专项方案
-
-| 文档 | 用途 |
+| 补充 | 文档 |
 |------|------|
-| [终端交互-实施方案](./终端交互-实施方案.md) | 本机 REPL：**阶段 A+B 已落地**（用法见 [使用说明 · 终端对话](./user-guide.md#终端对话repl)） |
+| 历史规格全文 | [**specs-archive.md**](./specs-archive.md)（原 `archive/specs/` 合并，按「原文：文件名」分块） |
 
 ---
 
-## 代码入口速查
+## 归档说明
 
-| 主题 | 路径 |
-|------|------|
-| 统一聊天与任务上下文 | `src/server/chatProcessing.ts` |
-| 终端 REPL | `src/cli/repl.ts` |
-| TUI（Ink + WS） | `src/tui/`、`pnpm cli tui` |
-| Agent 循环 | `src/agent/runAgent.ts` |
-| 任务编排 / 步骤工具闸门 | `src/tasks/taskRunner.ts`、`src/tasks/stepToolPolicy.ts` |
-| 任务与审批 | `src/tasks/taskService.ts`、`src/tasks/taskApproval.ts` |
-| 工具与 MCP | `src/tools/` |
-| Trace | `src/observability/`、`src/cli/trace.ts` |
-| 安全策略 | `src/security/` |
-| CI | `.github/workflows/ci.yml` |
+- [`archive/README.md`](./archive/README.md)：目录说明。  
+- 原 `architecture/plugin-boundaries.md` 已并入 [developer.md](./developer.md) §3。
