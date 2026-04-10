@@ -3,6 +3,10 @@
 @tailwind utilities;
 
 :root {
+    color-scheme: light;
+}
+
+html.dark {
     color-scheme: dark;
 }
 
@@ -11,7 +15,15 @@ html {
 }
 
 body {
-    @apply min-h-dvh bg-slate-950 text-slate-100 font-sans;
+    @apply min-h-dvh font-sans antialiased transition-colors duration-300;
+    @apply bg-slate-100 text-slate-900;
+    background-image:
+        radial-gradient(ellipse 120% 80% at 50% -20%, rgba(20, 184, 166, 0.14), transparent),
+        radial-gradient(ellipse 80% 50% at 100% 0%, rgba(59, 130, 246, 0.06), transparent);
+}
+
+html.dark body {
+    @apply bg-slate-950 text-slate-100;
     background-image:
         radial-gradient(ellipse 120% 80% at 50% -20%, rgba(20, 184, 166, 0.18), transparent),
         radial-gradient(ellipse 80% 50% at 100% 0%, rgba(59, 130, 246, 0.08), transparent);

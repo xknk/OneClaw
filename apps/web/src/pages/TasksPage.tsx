@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
-import { apiCreateTask, apiListTasks } from "@/api/client";
+import { useLocale } from "@/locale/LocaleContext";
+import { apiCreateTask, apiDeleteTask, apiListTasks } from "@/api/client";
 import type { TaskRecord, TaskStatus } from "@/api/types";
+import { formatDateTime } from "@/lib/formatDateTime";
 import { Button, Card, Input, Select, StatusBadge } from "@/components/ui";
 
 const STATUSES: (TaskStatus | "")[] = [
@@ -21,6 +23,7 @@ const STATUSES: (TaskStatus | "")[] = [
 
 export function TasksPage() {
     const { hasToken } = useAuth();
+    const { locale, t } = useLocale();
     const [tasks, setTasks] = useState<TaskRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -41,11 +44,11 @@ export function TasksPage() {
             });
             setTasks(rows);
         } catch (e) {
-            setError(e instanceof Error ? e.message : "加载失败");
+            setError(e instanceof Error ? e.message : t("tasks.loadFail"));
         } finally {
             setLoading(false);
         }
-    }, [failedOnly, limit, status]);
+    }, [failedOnly, limit, status, t]);
 
     useEffect(() => {
         void load();
@@ -62,29 +65,45 @@ export function TasksPage() {
             setTitle("");
             await load();
         } catch (e) {
-            setError(e instanceof Error ? e.message : "创建失败");
+            setError(e instanceof Error ? e.message : t("tasks.createFail"));
         } finally {
             setCreating(false);
+        }
+    };
+
+    const removeTask = async (taskId: string) => {
+        if (!hasToken) {
+            return;
+        }
+        if (!window.confirm(t("tasks.confirmDelete"))) {
+            return;
+        }
+        setError(null);
+        try {
+            await apiDeleteTask(taskId);
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : t("tasks.loadFail"));
         }
     };
 
     return (
         <div className="space-y-4">
             {!hasToken && (
-                <p className="rounded-xl border border-amber-900/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-100/90">
-                    访客无法创建任务。请
-                    <Link to="/login" className="mx-1 font-medium text-claw-300 underline">
-                        登录
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100/90">
+                    {t("tasks.guestWarnBefore")}
+                    <Link to="/login" className="mx-1 font-medium text-claw-700 underline dark:text-claw-300">
+                        {t("layout.login")}
                     </Link>
-                    并保存网关令牌（首次将自动在本机注册）。
+                    {t("tasks.guestWarnAfter")}
                 </p>
             )}
 
             <Card className="p-4">
-                <h2 className="text-sm font-semibold text-white">筛选</h2>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("tasks.filter")}</h2>
                 <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <label className="block text-xs text-slate-400">
-                        状态
+                    <label className="block text-xs text-slate-600 dark:text-slate-400">
+                        {t("tasks.status")}
                         <Select
                             className="mt-1"
                             value={status}
@@ -92,21 +111,21 @@ export function TasksPage() {
                         >
                             {STATUSES.map((s) => (
                                 <option key={s || "all"} value={s}>
-                                    {s || "全部"}
+                                    {s ? t(`taskStatus.${s}`) : t("tasks.all")}
                                 </option>
                             ))}
                         </Select>
                     </label>
-                    <label className="flex items-end gap-2 pb-2 text-sm text-slate-300">
+                    <label className="flex items-end gap-2 pb-2 text-sm text-slate-700 dark:text-slate-300">
                         <input
                             type="checkbox"
                             checked={failedOnly}
                             onChange={(e) => setFailedOnly(e.target.checked)}
-                            className="h-4 w-4 rounded border-slate-600"
+                            className="h-4 w-4 rounded border-slate-400 dark:border-slate-600"
                         />
-                        仅失败
+                        {t("tasks.failedOnly")}
                     </label>
-                    <label className="block text-xs text-slate-400">
+                    <label className="block text-xs text-slate-600 dark:text-slate-400">
                         limit
                         <Input
                             className="mt-1"
@@ -119,56 +138,70 @@ export function TasksPage() {
                     </label>
                 </div>
                 <Button type="button" variant="secondary" className="mt-3" onClick={() => void load()}>
-                    刷新
+                    {t("tasks.refresh")}
                 </Button>
             </Card>
 
             <Card className="p-4">
-                <h2 className="text-sm font-semibold text-white">新建任务</h2>
-                <p className="mt-1 text-xs text-slate-500">仅登录用户可创建（需本地已保存 WebChat 令牌）。</p>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("tasks.newTitle")}</h2>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-500">{t("tasks.newHint")}</p>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <Input
-                        placeholder="标题（可选）"
+                        placeholder={t("tasks.titlePh")}
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
                         disabled={!hasToken}
                     />
                     <Button type="button" onClick={() => void create()} disabled={creating || !hasToken}>
-                        创建
+                        {t("tasks.create")}
                     </Button>
                 </div>
             </Card>
 
-            {error && <p className="text-sm text-rose-400">{error}</p>}
+            {error && <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
 
             <Card className="overflow-hidden p-0">
-                <div className="border-b border-slate-800 px-4 py-3">
-                    <h2 className="text-sm font-semibold text-white">任务列表</h2>
-                    <p className="text-xs text-slate-500">对应 GET /api/tasks</p>
+                <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+                    <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("tasks.listTitle")}</h2>
+                    <p className="text-xs text-slate-600 dark:text-slate-500">{t("tasks.listHint")}</p>
                 </div>
                 {loading ? (
-                    <p className="p-6 text-center text-slate-500">加载中…</p>
+                    <p className="p-6 text-center text-slate-500">{t("tasks.loading")}</p>
                 ) : tasks.length === 0 ? (
-                    <p className="p-6 text-center text-slate-500">暂无任务</p>
+                    <p className="p-6 text-center text-slate-500">{t("tasks.empty")}</p>
                 ) : (
-                    <ul className="divide-y divide-slate-800">
-                        {tasks.map((t) => (
-                            <li key={t.taskId}>
+                    <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {tasks.map((task) => (
+                            <li key={task.taskId} className="flex items-stretch">
                                 <Link
-                                    to={`/tasks/${encodeURIComponent(t.taskId)}`}
-                                    className="flex flex-col gap-1 px-4 py-3 transition hover:bg-slate-800/40 sm:flex-row sm:items-center sm:justify-between"
+                                    to={`/tasks/${encodeURIComponent(task.taskId)}`}
+                                    className="flex min-w-0 flex-1 flex-col gap-1 px-4 py-3 transition hover:bg-slate-100 dark:hover:bg-slate-800/40 sm:flex-row sm:items-center sm:justify-between"
                                 >
                                     <div className="min-w-0">
-                                        <p className="truncate font-medium text-slate-100">{t.title}</p>
-                                        <p className="font-mono text-xs text-slate-500">{t.taskId}</p>
+                                        <p className="truncate font-medium text-slate-900 dark:text-slate-100">
+                                            {task.title}
+                                        </p>
+                                        <p className="font-mono text-xs text-slate-500">{task.taskId}</p>
                                     </div>
                                     <div className="flex shrink-0 items-center gap-2">
-                                        <StatusBadge status={t.status} />
+                                        <StatusBadge
+                                            status={task.status}
+                                            label={t(`taskStatus.${task.status}`)}
+                                        />
                                         <span className="text-xs text-slate-500">
-                                            {new Date(t.updatedAt).toLocaleString()}
+                                            {formatDateTime(task.updatedAt, locale)}
                                         </span>
                                     </div>
                                 </Link>
+                                {hasToken && (
+                                    <button
+                                        type="button"
+                                        className="shrink-0 border-l border-slate-200 px-3 text-xs text-slate-500 hover:bg-rose-50 hover:text-rose-600 dark:border-slate-800 dark:hover:bg-slate-800/60 dark:hover:text-rose-400"
+                                        onClick={() => void removeTask(task.taskId)}
+                                    >
+                                        {t("tasks.delete")}
+                                    </button>
+                                )}
                             </li>
                         ))}
                     </ul>

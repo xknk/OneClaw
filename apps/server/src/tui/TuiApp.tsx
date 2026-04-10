@@ -2,7 +2,7 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import WebSocket from "ws";
-import { appConfig, ollamaConfig } from "@/config/evn";
+import { appConfig } from "@/config/evn";
 import {
     filterSlashCommands,
     isSlashMenuLine,
@@ -10,6 +10,7 @@ import {
     type SlashCommandEntry,
 } from "@/cli/slashCommands";
 import { runTerminalSlash } from "@/cli/terminalCommandRunner";
+import * as T from "@/tui/tuiStrings";
 
 export type TuiAppProps = {
     wsUrl: string;
@@ -197,12 +198,14 @@ type SlashMenuProps = {
     entries: SlashCommandEntry[];
     selectedIndex: number;
     cols: number;
+    locale: import("@/config/evn").UiLocale;
 };
 
 const SlashMenu = memo(function SlashMenuInner({
     entries,
     selectedIndex,
     cols,
+    locale,
 }: SlashMenuProps): React.ReactElement {
     const visible = entries.slice(0, MAX_MENU_ROWS);
     const more = entries.length > MAX_MENU_ROWS;
@@ -222,9 +225,7 @@ const SlashMenu = memo(function SlashMenuInner({
             paddingY={1}
             marginTop={1}
         >
-            <Text color={THEME.orangeMuted}>
-                Slash commands · ↑↓ 选择 · Tab 填入 · Enter 补全或执行
-            </Text>
+            <Text color={THEME.orangeMuted}>{T.slashMenuBar(locale)}</Text>
             {visible.map((e, i) => {
                 const active = i === selectedIndex;
                 const desc = fitDesc(e.desc, descMax);
@@ -256,59 +257,15 @@ const SlashMenu = memo(function SlashMenuInner({
             })}
             {more ? (
                 <Text color={THEME.orangeMuted}>
-                    {`… 另有 ${entries.length - MAX_MENU_ROWS} 条未显示`}
+                    {T.slashMenuMore(locale, entries.length - MAX_MENU_ROWS)}
                 </Text>
             ) : null}
         </Box>
     );
 });
 
-function tuiHelpLines(sessionKey: string, taskId?: string): string {
-    const lines = [
-        "内置命令:",
-        "  /help, /?         本帮助",
-        "  /session <key>    切换会话键（仅影响未带 --task 时的转录）",
-        "  /clear            清空本窗口消息列表",
-        "  /status           会话、模型与目录摘要",
-        "  /onboard          运行初始化",
-        "  /doctor           运行系统自检",
-        "  /task ...         执行任务命令（同 pnpm cli task ...）",
-        "  /trace ...        执行 trace 命令（同 pnpm cli trace ...）",
-        "  /exit, /quit      退出 TUI",
-        "",
-        "行首输入 `/` 弹出命令列表；↑↓ 选择，Tab 填入，Enter 补全或执行。",
-        "",
-        "提示: 与 pnpm dev 同时开时，勿与 Web 共用同一 sessionKey。",
-    ];
-    if (taskId) {
-        lines.push(
-            "",
-            `当前: 已关联 --task ${taskId}，转录键 task:${taskId}（与 sessionKey=${sessionKey} 并存）。`
-        );
-    }
-    return lines.join("\n");
-}
-
-function tuiStatusLines(opts: {
-    sessionKey: string;
-    agentId?: string;
-    taskId?: string;
-}): string {
-    return [
-        "TUI 状态:",
-        `  sessionKey: ${opts.sessionKey}`,
-        `  agentId: ${opts.agentId ?? "(未指定)"}`,
-        `  taskId: ${opts.taskId ?? "(未指定)"}`,
-        "",
-        "配置摘要:",
-        `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
-        `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
-        `  skillsDir → ${appConfig.skillsDir}`,
-        `  Ollama → ${ollamaConfig.baseUrl} · model ${ollamaConfig.modelName}`,
-    ].join("\n");
-}
-
 export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps): React.ReactElement {
+    const locale = appConfig.uiLocale;
     const { exit } = useApp();
     const { stdout } = useStdout();
     const cols = stdout?.columns ?? 80;
@@ -316,7 +273,9 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
     const [lines, setLines] = useState<ChatRow[]>([]);
     const [input, setInput] = useState("");
     const [connected, setConnected] = useState(false);
-    const [status, setStatus] = useState("connecting…");
+    const [status, setStatus] = useState(() =>
+        locale === "en" ? "connecting..." : "connecting…",
+    );
     const [model, setModel] = useState("");
     const [appVersion, setAppVersion] = useState("");
     const [sessionKey, setSessionKey] = useState(defaultSession);
@@ -342,8 +301,8 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
     }, []);
 
     const filteredSlash = useMemo(
-        () => uniqueSlashLabels(filterSlashCommands(input)),
-        [input]
+        () => uniqueSlashLabels(filterSlashCommands(input, locale)),
+        [input, locale],
     );
     const menuVisible = isSlashMenuLine(input) && filteredSlash.length > 0;
 
@@ -367,7 +326,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
         if (!isSlashMenuLine(inputRef.current)) {
             return;
         }
-        const list = uniqueSlashLabels(filterSlashCommands(inputRef.current));
+        const list = uniqueSlashLabels(filterSlashCommands(inputRef.current, locale));
         if (list.length === 0) return;
 
         if (key.upArrow) {
@@ -395,17 +354,17 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
         wsRef.current = ws;
         ws.on("open", () => {
             setConnected(true);
-            setStatus("connected");
+            setStatus(locale === "en" ? "connected" : "connected");
         });
         ws.on("close", () => {
             setConnected(false);
-            setStatus("disconnected");
+            setStatus(locale === "en" ? "disconnected" : "disconnected");
             setBusy(false);
             pendingByIdRef.current.clear();
             wsRef.current = null;
         });
         ws.on("error", () => {
-            setStatus("error");
+            setStatus(locale === "en" ? "error" : "error");
             setBusy(false);
             pendingByIdRef.current.clear();
         });
@@ -452,7 +411,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                         if (pending && !pending.gotAssistant && !pending.gotError) {
                             appendLine({
                                 role: "system",
-                                text: "本次请求已结束，但模型没有返回可显示内容。请重试或简化问题。",
+                                text: T.errDoneNoContent(locale),
                             });
                         }
                         pendingByIdRef.current.delete(rid);
@@ -468,10 +427,8 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                     }
                     const raw = String(msg.message ?? "");
                     const message =
-                        raw === "This operation was aborted"
-                            ? "请求超时或被中断（This operation was aborted）。请重试，或缩短问题后再试。"
-                            : raw;
-                    appendLine({ role: "system", text: `错误: ${message}` });
+                        raw === "This operation was aborted" ? T.errAborted(locale) : raw;
+                    appendLine({ role: "system", text: `${T.errPrefix(locale)}${message}` });
                 }
             } catch {
                 /* ignore */
@@ -481,7 +438,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
             ws.close();
             wsRef.current = null;
         };
-    }, [appendLine, wsUrl]);
+    }, [appendLine, locale, wsUrl]);
 
     const runLocalSlash = useCallback(
         async (fullLine: string): Promise<boolean> => {
@@ -491,7 +448,10 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                 return true;
             }
             if (text === "/help" || text === "/?") {
-                appendLine({ role: "system", text: tuiHelpLines(sessionKey, taskId) });
+                appendLine({
+                    role: "system",
+                    text: T.tuiHelpLines(locale, { sessionKey, taskId }),
+                });
                 return true;
             }
             if (text === "/clear") {
@@ -501,22 +461,27 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
             if (text === "/status") {
                 appendLine({
                     role: "system",
-                    text: tuiStatusLines({ sessionKey, agentId, taskId }),
+                    text: T.tuiStatusLines(locale, { sessionKey, agentId, taskId }),
+                });
+                return true;
+            }
+            if (text === "/workspace") {
+                appendLine({
+                    role: "system",
+                    text: T.tuiWorkspaceLines(locale),
                 });
                 return true;
             }
             if (text.startsWith("/session")) {
                 const rest = text.slice("/session".length).trim();
                 if (!rest) {
-                    appendLine({ role: "system", text: "用法: /session <key>" });
+                    appendLine({ role: "system", text: T.usageSession(locale) });
                     return true;
                 }
                 setSessionKey(rest);
                 appendLine({
                     role: "system",
-                    text: taskId
-                        ? `已切换 sessionKey=${rest}\n（提示：当前仍带 --task，实际转录键仍为 task:<taskId>。）`
-                        : `已切换 sessionKey=${rest}`,
+                    text: T.sessionSwitched(locale, rest, taskId),
                 });
                 return true;
             }
@@ -526,12 +491,12 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                     appendLine({ role: "system", text: out });
                     return true;
                 }
-                appendLine({ role: "system", text: "未知命令。输入 /help 或 `/` 查看列表。" });
+                appendLine({ role: "system", text: T.unknownCommand(locale) });
                 return true;
             }
             return false;
         },
-        [agentId, appendLine, exit, sessionKey, taskId]
+        [agentId, appendLine, exit, locale, sessionKey, taskId]
     );
 
     const submit = useCallback(
@@ -544,7 +509,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                 setInput("");
                 const ws = wsRef.current;
                 if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
-                    appendLine({ role: "system", text: "未连接，无法发送" });
+                    appendLine({ role: "system", text: T.errNotConnected(locale) });
                     return;
                 }
                 appendLine({ role: "user", text: v });
@@ -565,7 +530,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
             }
 
             if (v.startsWith("/") && !v.includes(" ")) {
-                const list = uniqueSlashLabels(filterSlashCommands(v));
+                const list = uniqueSlashLabels(filterSlashCommands(v, locale));
                 if (list.length > 0) {
                     const idx = Math.min(slashIndex, Math.max(0, list.length - 1));
                     const sel = list[idx] ?? list[0];
@@ -579,8 +544,8 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                                 role: "system",
                                 text:
                                     sel.cmd === "/session"
-                                        ? "用法: /session <key>（输入空格后继续键名，或直接发送 /session mykey）"
-                                        : "该命令需要参数。",
+                                        ? T.needsArgSession(locale)
+                                        : T.needsArgGeneric(locale),
                             });
                             return;
                         }
@@ -599,7 +564,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
             setInput("");
             const ws = wsRef.current;
             if (!connected || !ws || ws.readyState !== WebSocket.OPEN) {
-                appendLine({ role: "system", text: "未连接，无法发送" });
+                appendLine({ role: "system", text: T.errNotConnected(locale) });
                 return;
             }
             appendLine({ role: "user", text: v });
@@ -616,7 +581,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                 })
             );
         },
-        [agentId, appendLine, connected, runLocalSlash, sessionKey, slashIndex, taskId]
+        [agentId, appendLine, connected, locale, runLocalSlash, sessionKey, slashIndex, taskId]
     );
 
     /** 斜杠菜单占位；不截断聊天记录，由终端缓冲区纵向滚动（瀑布流） */
@@ -628,10 +593,10 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
     const textCols = Math.max(16, barCols - 2);
 
     const metaBits = [
-        connected ? "ready" : status,
+        connected ? T.metaReady(locale) : T.wsStatusLabel(locale, status),
         model || null,
-        busyUi ? "streaming" : "idle",
-        "Ctrl+C exit",
+        busyUi ? T.metaStreaming(locale) : T.metaIdle(locale),
+        T.metaCtrlC(locale),
     ].filter(Boolean) as string[];
 
     return (
@@ -662,7 +627,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                                     <Text bold color={THEME.orangeBright}>
                                         Claw
                                     </Text>
-                                    <Text color={THEME.grayDim}>  workspace</Text>
+                                    <Text color={THEME.grayDim}> workspace</Text>
                                     {appVersion ? (
                                         <Text color={THEME.orangeMuted}>
                                             {"  "}
@@ -670,17 +635,17 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                                         </Text>
                                     ) : null}
                                 </Text>
-                                <Text color={THEME.orangeMuted}>Welcome back · local TUI</Text>
+                                <Text color={THEME.orangeMuted}>{T.tuiWelcomeSubtitle(locale)}</Text>
                             </Box>
                             <Box flexDirection="column" alignItems="flex-end">
                                 <Text>
-                                    <Text color={THEME.orangeMuted}>session</Text>
+                                    <Text color={THEME.orangeMuted}>{T.tuiSessionLabel(locale)}</Text>
                                     <Text> </Text>
                                     <Text color={THEME.white} bold>
                                         {sessionKey}
                                     </Text>
                                 </Text>
-                                <Text color={THEME.grayDim}>Tips: type / for commands</Text>
+                                <Text color={THEME.grayDim}>{T.tuiTipsSlash(locale)}</Text>
                             </Box>
                         </Box>
                         <Text color={THEME.gray} wrap="truncate-end">
@@ -694,13 +659,12 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
             <Box flexDirection="column" marginTop={1} marginBottom={0} paddingX={1} paddingY={0}>
                 {lines.length === 0 && !busy ? (
                     <Box flexDirection="column" marginBottom={2}>
-                        <Text color={THEME.gray}>
-                            在此输入消息，Enter 发送。对话链与 REPL / WebChat 相同。
-                        </Text>
+                        <Text color={THEME.gray}>{T.tuiEmptyHint(locale)}</Text>
                         <Box marginTop={1}>
                             <Text color={THEME.grayDim}>
-                                输入 <Text color={THEME.orangeBright} bold>/</Text>{" "}
-                                打开命令菜单（↑↓ Tab Enter）。
+                                {T.tuiSlashOpenLine(locale).before}
+                                <Text color={THEME.orangeBright} bold>/</Text>
+                                {T.tuiSlashOpenLine(locale).after}
                             </Text>
                         </Box>
                     </Box>
@@ -716,7 +680,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                                     <Text color={THEME.white} bold>
                                         {"● "}
                                     </Text>
-                                    <Text color={THEME.gray}>generating response…</Text>
+                                    <Text color={THEME.gray}>{T.tuiGenerating(locale)}</Text>
                                 </Text>
                             </Box>
                         ) : null}
@@ -735,6 +699,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                         entries={filteredSlash}
                         selectedIndex={slashIndex}
                         cols={Math.max(40, cols - 2)}
+                        locale={locale}
                     />
                 ) : (
                     <Text color={THEME.grayDim}> </Text>
@@ -752,9 +717,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                 <Text dimColor color={THEME.white}>
                     {inputDivider(barCols)}
                 </Text>
-                <Text color={THEME.gray}>
-                    Enter 发送 · / 命令 · 反色块为光标
-                </Text>
+                <Text color={THEME.gray}>{T.tuiInputFooter(locale)}</Text>
                 <Box
                     flexDirection="row"
                     alignItems="center"
@@ -773,7 +736,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                             value={input}
                             onChange={setInput}
                             onSubmit={submit}
-                            placeholder="Type message…"
+                            placeholder={T.tuiPlaceholder(locale)}
                             showCursor={true}
                         />
                     </Box>
@@ -782,10 +745,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
 
             <Box marginTop={0.5} flexDirection="column" flexShrink={0}>
                 <StatusStrip cols={cols} parts={metaBits} />
-                <Text color={THEME.grayDim}>
-                    {" "}
-                    ? for shortcuts · / command list · /help · Ctrl+C exit
-                </Text>
+                <Text color={THEME.grayDim}> {T.tuiBottomHint(locale)}</Text>
             </Box>
         </Box>
     );

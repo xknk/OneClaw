@@ -81,3 +81,11 @@ export function getMcpProvidersForRegistry(): ToolProvider[] {
         })
     );
 }
+
+/**
+ * 在通过 API 或外部编辑修改 MCP 配置文件后调用，使下次请求使用新配置并重建连接。
+ */
+export function invalidateMcpRoutingCache(): void {
+    cachedClient = null;
+    cachedConfigKey = null;
+}

@@ -62,6 +62,21 @@ export async function readTask(taskId: string): Promise<TaskRecord | null> {
 }
 
 /**
+ * 永久删除任务文件（用于管理端清理）。
+ */
+export async function deleteTaskFile(taskId: string): Promise<boolean> {
+    const file = taskPath(taskId.trim());
+    try {
+        await fs.unlink(file);
+        return true;
+    } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        if (err.code === "ENOENT") return false;
+        throw e;
+    }
+}
+
+/**
  * 扫描目录，获取所有有效的 JSON 任务文件名
  * 过滤掉 .tmp 临时文件，防止读取到写入一半的数据
  */

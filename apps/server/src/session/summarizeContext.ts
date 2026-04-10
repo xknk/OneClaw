@@ -4,8 +4,21 @@
 
 import type { ChatMessage } from "../llm/providers/ModelProvider";
 import { chatWithModel } from "../llm/model";
+import { appConfig } from "@/config/evn";
 
-const SUMMARIZE_SYSTEM = `你是一个对话摘要助手。请将下面这段对话历史总结成一段简短的摘要（中文），保留：谁说了什么、主要结论或事实。控制在 300 字以内。`;
+function summarizeSystemPrompt(): string {
+    if (appConfig.uiLocale === "en") {
+        return `You are a conversation summarizer. Summarize the dialogue history below in a short paragraph (English). Keep: who said what, main conclusions or facts. Max ~300 words.`;
+    }
+    return `你是一个对话摘要助手。请将下面这段对话历史总结成一段简短的摘要（中文），保留：谁说了什么、主要结论或事实。控制在 300 字以内。`;
+}
+
+function summarizeUserPrompt(text: string): string {
+    if (appConfig.uiLocale === "en") {
+        return `Summarize the following conversation:\n\n${text}`;
+    }
+    return `请总结以下对话：\n\n${text}`;
+}
 
 /**
  * 把 messages 交给 LLM 总结成一段文字
@@ -16,8 +29,8 @@ export async function summarizeMessages(messages: ChatMessage[]): Promise<string
         .map((m) => `[${m.role}]: ${m.content}`)
         .join("\n\n");
     const summary = await chatWithModel([
-        { role: "system", content: SUMMARIZE_SYSTEM },
-        { role: "user", content: `请总结以下对话：\n\n${text}` },
+        { role: "system", content: summarizeSystemPrompt() },
+        { role: "user", content: summarizeUserPrompt(text) },
     ]);
     return summary.trim();
 }

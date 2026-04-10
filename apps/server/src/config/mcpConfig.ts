@@ -1,4 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { getDefaultMcpServersFilePath } from "@/config/runtimePaths";
 
 /**
  * 单个 MCP 服务进程配置（stdio 模式）。
@@ -107,11 +109,34 @@ export function loadMcpServerConfigs(): McpServerConfig[] {
 
     // 方式 B：从环境变量直接读取 JSON 字符串
     const inline = process.env.ONECLAW_MCP_SERVERS?.trim();
-    if (!inline) return [];
-
-    try {
-        return parseMcpServerConfigs(JSON.parse(inline) as unknown);
-    } catch {
-        return [];
+    if (inline) {
+        try {
+            return parseMcpServerConfigs(JSON.parse(inline) as unknown);
+        } catch {
+            return [];
+        }
     }
+
+    // 方式 C：数据目录下默认文件（便于界面或无代码用户维护）
+    const fallback = getDefaultMcpServersFilePath();
+    if (existsSync(fallback)) {
+        try {
+            const raw = JSON.parse(readFileSync(fallback, "utf8")) as unknown;
+            return parseMcpServerConfigs(raw);
+        } catch {
+            return [];
+        }
+    }
+
+    return [];
+}
+
+/**
+ * 用于管理界面读写的 MCP JSON 路径。
+ * 若设置了 ONECLAW_MCP_SERVERS_FILE 则指向该路径，否则为数据目录默认文件。
+ */
+export function resolveMcpServersFilePathForAdmin(): string {
+    const env = process.env.ONECLAW_MCP_SERVERS_FILE?.trim();
+    if (env) return path.resolve(env);
+    return path.resolve(getDefaultMcpServersFilePath());
 }

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { ChatMessage, Conversation } from "@/chat/types";
 import { useAuth } from "@/auth/AuthContext";
-import { apiChat, apiSessionReset } from "@/api/client";
+import { useLocale } from "@/locale/LocaleContext";
+import { apiChat, apiSessionReset, apiWorkspaceSessionDelete } from "@/api/client";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { Button, Card, Input, TextArea } from "@/components/ui";
 import { createEmptyConversation, loadConversations, saveConversations } from "@/lib/conversationStore";
@@ -10,6 +11,7 @@ import { ensureRegistered, getProfile } from "@/lib/localUser";
 
 export function ChatPage() {
     const { hasToken } = useAuth();
+    const { t } = useLocale();
 
     const [guestSessionKey, setGuestSessionKey] = useState(() => `guest-${crypto.randomUUID()}`);
     const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -43,7 +45,7 @@ export function ChatPage() {
         setUserId(uid);
         let list = loadConversations(uid);
         if (list.length === 0) {
-            const c = createEmptyConversation();
+            const c = createEmptyConversation(t("chat.newChat"));
             list = [c];
             saveConversations(uid, list);
         }
@@ -172,9 +174,9 @@ export function ChatPage() {
                 });
             }
         } catch (e) {
-            const msg = e instanceof Error ? e.message : "请求失败";
+            const msg = e instanceof Error ? e.message : t("chat.errorToken");
             setError(msg);
-            setMessages((m) => [...m, { role: "assistant", text: `（错误）${msg}` }]);
+            setMessages((m) => [...m, { role: "assistant", text: `${t("chat.errorPrefix")}${msg}` }]);
         } finally {
             setLoading(false);
         }
@@ -187,6 +189,7 @@ export function ChatPage() {
         input,
         intent,
         loading,
+        t,
         taskId,
         userId,
     ]);
@@ -202,7 +205,7 @@ export function ChatPage() {
                     ...activeConv,
                     sessionKey: newKey,
                     messages: [],
-                    title: "新对话",
+                    title: t("chat.newChat"),
                     updatedAt: new Date().toISOString(),
                 };
                 const next = conversations.map((c) => (c.id === activeId ? cleared : c));
@@ -214,7 +217,7 @@ export function ChatPage() {
                 setMessages([]);
             }
         } catch (e) {
-            setError(e instanceof Error ? e.message : "重置失败");
+            setError(e instanceof Error ? e.message : t("chat.resetFail"));
         }
     }, [
         activeConv,
@@ -224,6 +227,7 @@ export function ChatPage() {
         guestSessionKey,
         hasToken,
         persistConversations,
+        t,
         userId,
     ]);
 
@@ -236,7 +240,7 @@ export function ChatPage() {
         if (!userId) {
             return;
         }
-        const c = createEmptyConversation();
+        const c = createEmptyConversation(t("chat.newChat"));
         const next = [c, ...conversations];
         persistConversations(next);
         setActiveId(c.id);
@@ -248,35 +252,82 @@ export function ChatPage() {
         setMobileHistoryOpen(false);
     };
 
+    const deleteConversation = useCallback(
+        async (id: string) => {
+            if (!hasToken || !userId) {
+                return;
+            }
+            if (!window.confirm(t("chat.confirmDeleteChat"))) {
+                return;
+            }
+            const c = conversations.find((x) => x.id === id);
+            if (!c) {
+                return;
+            }
+            try {
+                await apiWorkspaceSessionDelete({
+                    sessionKey: c.sessionKey,
+                    agentId: c.agentId?.trim() || "main",
+                });
+            } catch (e) {
+                setError(e instanceof Error ? e.message : t("chat.errorToken"));
+            }
+            const next = conversations.filter((x) => x.id !== id);
+            persistConversations(next);
+            if (activeId === id) {
+                const first = next[0];
+                if (first) {
+                    setActiveId(first.id);
+                    setMessages(first.messages);
+                    setAgentId(first.agentId);
+                    setIntent(first.intent);
+                    setTaskId(first.taskId);
+                    prevActiveId.current = first.id;
+                } else {
+                    const empty = createEmptyConversation(t("chat.newChat"));
+                    persistConversations([empty]);
+                    setActiveId(empty.id);
+                    setMessages([]);
+                    setAgentId(empty.agentId);
+                    setIntent(empty.intent);
+                    setTaskId(empty.taskId);
+                    prevActiveId.current = empty.id;
+                }
+            }
+        },
+        [activeId, conversations, hasToken, persistConversations, t, userId],
+    );
+
     const sessionKeyDisplay = hasToken && activeConv ? activeConv.sessionKey : guestSessionKey;
 
     return (
         <div className="flex min-h-[min(70vh,640px)] flex-1 flex-col gap-3">
             {!hasToken && (
-                <p className="rounded-xl border border-slate-800/80 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
-                    <span className="text-slate-300">访客模式</span>
-                    ：对话不保存到本机；重置话题后将无法查看此前内容。
-                    <Link to="/login" className="ml-1 text-claw-400 underline">
-                        登录
+                <p className="rounded-xl border border-slate-200/90 bg-white/70 px-3 py-2 text-xs text-slate-600 dark:border-slate-800/80 dark:bg-slate-900/40 dark:text-slate-400">
+                    <span className="text-slate-800 dark:text-slate-300">{t("chat.guestMode")}</span>
+                    {t("chat.guestIntro")}
+                    <Link to="/login" className="mx-1 text-claw-400 underline">
+                        {t("layout.login")}
                     </Link>
-                    后自动在本机注册并保存历史对话。
+                    {t("chat.guestOutro")}
                 </p>
             )}
 
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900/30 md:flex-row">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white/50 md:flex-row dark:border-slate-800/80 dark:bg-slate-900/30">
                 {hasToken && (
                     <ChatSidebar
                         conversations={conversations}
                         activeId={activeId}
                         onSelect={selectConversation}
                         onNewChat={newChat}
+                        onDelete={deleteConversation}
                         mobileOpen={mobileHistoryOpen}
                         onCloseMobile={() => setMobileHistoryOpen(false)}
                     />
                 )}
 
                 <div className="flex min-w-0 flex-1 flex-col">
-                    <div className="flex items-center gap-2 border-b border-slate-800/80 px-3 py-2 md:hidden">
+                    <div className="flex items-center gap-2 border-b border-slate-200/90 px-3 py-2 dark:border-slate-800/80 md:hidden">
                         {hasToken && (
                             <Button
                                 type="button"
@@ -284,24 +335,24 @@ export function ChatPage() {
                                 className="shrink-0 px-3"
                                 onClick={() => setMobileHistoryOpen(true)}
                             >
-                                历史
+                                {t("chat.history")}
                             </Button>
                         )}
-                        <span className="truncate text-xs text-slate-500">
-                            {hasToken ? "已登录 · 历史已保存" : "访客 · 不保存历史"}
+                        <span className="truncate text-xs text-slate-500 dark:text-slate-500">
+                            {hasToken ? t("chat.statusSaved") : t("chat.statusGuest")}
                         </span>
                     </div>
 
-                    <details className="border-b border-slate-800/80 px-3 py-2">
-                        <summary className="cursor-pointer text-xs font-medium text-slate-400">
-                            会话参数（sessionKey / agent / intent / task）
+                    <details className="border-b border-slate-200/90 px-3 py-2 dark:border-slate-800/80">
+                        <summary className="cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-400">
+                            {t("chat.sessionParams")}
                         </summary>
                         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                            <label className="block text-[11px] text-slate-500">
-                                sessionKey（当前）
+                            <label className="block text-[11px] text-slate-600 dark:text-slate-500">
+                                {t("chat.sessionKey")}
                                 <Input className="mt-1 font-mono text-xs" value={sessionKeyDisplay} readOnly />
                             </label>
-                            <label className="block text-[11px] text-slate-400">
+                            <label className="block text-[11px] text-slate-600 dark:text-slate-400">
                                 agentId
                                 <Input
                                     className="mt-1"
@@ -316,8 +367,8 @@ export function ChatPage() {
                                     placeholder="main"
                                 />
                             </label>
-                            <label className="block text-[11px] text-slate-400">
-                                intent（可选）
+                            <label className="block text-[11px] text-slate-600 dark:text-slate-400">
+                                {t("chat.intentOpt")}
                                 <Input
                                     className="mt-1"
                                     value={intent}
@@ -330,8 +381,8 @@ export function ChatPage() {
                                     }}
                                 />
                             </label>
-                            <label className="block text-[11px] text-slate-400">
-                                taskId（可选）
+                            <label className="block text-[11px] text-slate-600 dark:text-slate-400">
+                                {t("chat.taskIdOpt")}
                                 <Input
                                     className="mt-1"
                                     value={taskId}
@@ -347,10 +398,10 @@ export function ChatPage() {
                         </div>
                         <div className="mt-2">
                             <Button type="button" variant="secondary" onClick={() => void reset()}>
-                                重置话题
+                                {t("chat.resetTopic")}
                             </Button>
-                            <p className="mt-2 text-[11px] text-slate-500">
-                                访客：重置后当前窗口清空，无历史。登录用户：重置后清空当前对话，侧栏仍保留该会话条目。
+                            <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-500">
+                                {t("chat.resetHint")}
                             </p>
                         </div>
                     </details>
@@ -358,10 +409,8 @@ export function ChatPage() {
                     <Card className="flex min-h-[280px] flex-1 flex-col overflow-hidden rounded-none border-0 bg-transparent p-0 shadow-none">
                         <div className="flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">
                             {messages.length === 0 && (
-                                <p className="text-center text-sm text-slate-500">
-                                    {hasToken
-                                        ? "从左侧选择历史对话，或新建对话。"
-                                        : "发送消息开始对话。"}
+                                <p className="text-center text-sm text-slate-500 dark:text-slate-500">
+                                    {hasToken ? t("chat.emptyLoggedIn") : t("chat.emptyGuest")}
                                 </p>
                             )}
                             {messages.map((m, i) => (
@@ -372,8 +421,8 @@ export function ChatPage() {
                                     <div
                                         className={`max-w-[92%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed sm:max-w-[85%] ${
                                             m.role === "user"
-                                                ? "bg-claw-600/90 text-white shadow-lg"
-                                                : "border border-slate-700/80 bg-slate-800/80 text-slate-100"
+                                                ? "bg-claw-600 text-white shadow-md dark:bg-claw-600/90 dark:shadow-lg"
+                                                : "border border-slate-200 bg-white text-slate-800 shadow-sm dark:border-slate-700/80 dark:bg-slate-800/80 dark:text-slate-100"
                                         }`}
                                     >
                                         <div className="whitespace-pre-wrap break-words">{m.text}</div>
@@ -382,30 +431,30 @@ export function ChatPage() {
                             ))}
                             {loading && (
                                 <div className="flex justify-start">
-                                    <div className="rounded-2xl border border-slate-700/80 bg-slate-800/60 px-4 py-3 text-sm text-slate-400">
-                                        正在思考…
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500 dark:border-slate-700/80 dark:bg-slate-800/60 dark:text-slate-400">
+                                        {t("chat.thinking")}
                                     </div>
                                 </div>
                             )}
                             <div ref={bottomRef} />
                         </div>
                         {error && (
-                            <div className="border-t border-slate-800 px-3 py-2 text-xs text-rose-400 sm:px-4">
+                            <div className="border-t border-slate-200 px-3 py-2 text-xs text-rose-600 dark:border-slate-800 dark:text-rose-400 sm:px-4">
                                 <p>{error}</p>
                                 {(error.includes("token") || error.includes("Token")) && (
                                     <p className="mt-1">
-                                        <Link to="/login" className="text-claw-400 underline">
-                                            前往登录
+                                        <Link to="/login" className="text-claw-600 underline dark:text-claw-400">
+                                            {t("chat.goLogin")}
                                         </Link>
                                     </p>
                                 )}
                             </div>
                         )}
-                        <div className="border-t border-slate-800/90 bg-slate-900/40 p-3">
+                        <div className="border-t border-slate-200/90 bg-slate-50/90 p-3 dark:border-slate-800/90 dark:bg-slate-900/40">
                             <TextArea
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
-                                placeholder="输入消息，Enter 发送（Shift+Enter 换行）"
+                                placeholder={t("chat.placeholder")}
                                 rows={3}
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter" && !e.shiftKey) {
@@ -417,7 +466,7 @@ export function ChatPage() {
                             />
                             <div className="mt-2 flex justify-end gap-2">
                                 <Button type="button" onClick={() => void sendMessage()} disabled={loading}>
-                                    发送
+                                    {t("chat.send")}
                                 </Button>
                             </div>
                         </div>

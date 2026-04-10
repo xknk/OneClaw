@@ -5,6 +5,7 @@
 import type { CreateTaskInput } from "./types";
 import type { PlanStep } from "./collaborationTypes";
 import { META_PLAN_KEY } from "./collaborationTypes";
+import { loadDynamicTaskTemplates } from "./dynamicTaskTemplates";
 
 /**
  * 任务模板定义接口
@@ -72,11 +73,16 @@ export const TASK_TEMPLATE_REGISTRY: Record<string, TaskTemplateDefinition> = {
     },
 };
 
+function mergedTemplateRegistry(): Record<string, TaskTemplateDefinition> {
+    const dynamic = loadDynamicTaskTemplates();
+    return { ...TASK_TEMPLATE_REGISTRY, ...dynamic };
+}
+
 /**
  * 获取所有可用模板的简要信息（用于前端下拉列表或模型查询）
  */
 export function listTaskTemplateSummaries() {
-    return Object.values(TASK_TEMPLATE_REGISTRY).map((t) => ({
+    return Object.values(mergedTemplateRegistry()).map((t) => ({
         id: t.id,
         defaultTitle: t.defaultTitle,
         defaultParams: t.defaultParams,
@@ -87,7 +93,7 @@ export function listTaskTemplateSummaries() {
  * 根据 ID 获取特定模板详情
  */
 export function getTaskTemplate(id: string): TaskTemplateDefinition | undefined {
-    return TASK_TEMPLATE_REGISTRY[id.trim()];
+    return mergedTemplateRegistry()[id.trim()];
 }
 
 /**

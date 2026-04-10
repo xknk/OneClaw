@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
+import { useLocale } from "@/locale/LocaleContext";
+import type { UiLocale } from "@/locale/types";
 import { apiListTasks, getToken } from "@/api/client";
 import { Button, Card, Input } from "@/components/ui";
+import { useTheme } from "@/theme/ThemeContext";
+import type { ThemePreference } from "@/theme/types";
+import { IconMonitor, IconMoon, IconSun } from "@/components/icons";
 
 export function SettingsPage() {
     const { webchatTokenRequired, isGuestAllowed, login, logout, hasToken } = useAuth();
+    const { locale, setLocale, t } = useLocale();
+    const { preference, setPreference } = useTheme();
     const [token, setTokenState] = useState(() => getToken());
     const [status, setStatus] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -15,13 +22,13 @@ export function SettingsPage() {
     }, [hasToken]);
 
     const save = () => {
-        const t = token.trim();
-        if (!t) {
+        const tok = token.trim();
+        if (!tok) {
             logout();
-            setStatus("已清除本地令牌");
+            setStatus(t("settings.cleared"));
         } else {
-            login(t);
-            setStatus("已保存到本地");
+            login(tok);
+            setStatus(t("settings.saved"));
         }
         setTimeout(() => setStatus(null), 2000);
     };
@@ -31,69 +38,127 @@ export function SettingsPage() {
         setStatus(null);
         try {
             await apiListTasks({ limit: 1 });
-            setStatus("连接正常（已调用 GET /api/tasks）");
+            setStatus(t("settings.connOk"));
         } catch (e) {
-            setError(e instanceof Error ? e.message : "失败");
+            setError(e instanceof Error ? e.message : t("settings.error"));
         }
+    };
+
+    const onLangChange = (v: UiLocale) => {
+        setLocale(v);
+    };
+
+    const onThemeChange = (p: ThemePreference) => {
+        setPreference(p);
     };
 
     return (
         <div className="space-y-4">
             <Card className="p-4">
-                <h2 className="text-sm font-semibold text-white">WebChat 鉴权</h2>
-                <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                    当前网关状态（由{" "}
-                    <code className="font-mono text-claw-400">GET /api/auth/status</code> 提供）：
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("settings.themeTitle")}</h2>
+                <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-500">
+                    {t("settings.themeHint")}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                        type="button"
+                        variant={preference === "light" ? "primary" : "secondary"}
+                        className="gap-2"
+                        onClick={() => onThemeChange("light")}
+                    >
+                        <IconSun className="h-4 w-4" />
+                        {t("settings.themeLight")}
+                    </Button>
+                    <Button
+                        type="button"
+                        variant={preference === "dark" ? "primary" : "secondary"}
+                        className="gap-2"
+                        onClick={() => onThemeChange("dark")}
+                    >
+                        <IconMoon className="h-4 w-4" />
+                        {t("settings.themeDark")}
+                    </Button>
+                    <Button
+                        type="button"
+                        variant={preference === "system" ? "primary" : "secondary"}
+                        className="gap-2"
+                        onClick={() => onThemeChange("system")}
+                    >
+                        <IconMonitor className="h-4 w-4" />
+                        {t("settings.themeSystem")}
+                    </Button>
+                </div>
+            </Card>
+
+            <Card className="p-4">
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("settings.uiLang")}</h2>
+                <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-500">
+                    {t("settings.uiLangHint")}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                        type="button"
+                        variant={locale === "zh" ? "primary" : "secondary"}
+                        onClick={() => onLangChange("zh")}
+                    >
+                        {t("settings.langZh")}
+                    </Button>
+                    <Button
+                        type="button"
+                        variant={locale === "en" ? "primary" : "secondary"}
+                        onClick={() => onLangChange("en")}
+                    >
+                        {t("settings.langEn")}
+                    </Button>
+                </div>
+            </Card>
+
+            <Card className="p-4">
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("settings.titleAuth")}</h2>
+                <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-500">
+                    {t("settings.authIntro")}
                     {webchatTokenRequired ? (
-                        <span className="text-amber-200/90"> 需要令牌（已配置 WEBCHAT_TOKEN）</span>
+                        <span className="text-amber-800 dark:text-amber-200/90"> {t("settings.tokenRequired")}</span>
                     ) : (
-                        <span className="text-emerald-200/90"> 开放访问（未配置 WEBCHAT_TOKEN）</span>
+                        <span className="text-emerald-800 dark:text-emerald-200/90"> {t("settings.tokenOpen")}</span>
                     )}
                 </p>
-                <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                    若需登录或访客入口，请使用{" "}
-                    <Link to="/login" className="text-claw-400 hover:underline">
-                        登录页
+                <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-500">
+                    {t("settings.authHint")}
+                    <Link to="/login" className="text-claw-600 hover:underline dark:text-claw-400">
+                        {" "}
+                        {t("layout.login")}
                     </Link>
-                    。请求将携带{" "}
-                    <code className="font-mono text-slate-400">Authorization: Bearer …</code>（当填写了令牌时）。
-                    {isGuestAllowed ? " 当前服务端允许无令牌访问。" : ""}
+                    {isGuestAllowed ? ` ${t("settings.guestAllowed")}` : ""}
                 </p>
-                <label className="mt-4 block text-xs text-slate-400">
-                    Token
+                <label className="mt-4 block text-xs text-slate-600 dark:text-slate-400">
+                    {t("settings.tokenLabel")}
                     <Input
                         className="mt-1 font-mono"
                         type="password"
                         autoComplete="off"
                         value={token}
                         onChange={(e) => setTokenState(e.target.value)}
-                        placeholder="与 .env 中 WEBCHAT_TOKEN 一致"
+                        placeholder={t("settings.tokenPlaceholder")}
                     />
                 </label>
                 <div className="mt-3 flex flex-wrap gap-2">
                     <Button type="button" onClick={save}>
-                        保存
+                        {t("settings.save")}
                     </Button>
                     <Button type="button" variant="secondary" onClick={() => void testConn()}>
-                        测试连接
+                        {t("settings.testConn")}
                     </Button>
                 </div>
-                {status && <p className="mt-2 text-sm text-claw-300">{status}</p>}
-                {error && <p className="mt-2 text-sm text-rose-400">{error}</p>}
+                {status && <p className="mt-2 text-sm text-claw-700 dark:text-claw-300">{status}</p>}
+                {error && <p className="mt-2 text-sm text-rose-600 dark:text-rose-400">{error}</p>}
             </Card>
 
             <Card className="p-4">
-                <h2 className="text-sm font-semibold text-white">开发说明</h2>
-                <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-slate-500">
-                    <li>
-                        本地开发：根目录执行 <code className="font-mono text-slate-400">pnpm dev</code>{" "}
-                        同时启动 API（默认 3000）与 Vite（5173），代理已指向网关。
-                    </li>
-                    <li>
-                        生产环境：先 <code className="font-mono text-slate-400">pnpm build</code>，再{" "}
-                        <code className="font-mono text-slate-400">pnpm start</code>
-                        ，由服务端托管 <code className="font-mono text-slate-400">apps/web/dist</code>。
-                    </li>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("settings.devTitle")}</h2>
+                <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-slate-600 dark:text-slate-500">
+                    <li>{t("settings.dev1")}</li>
+                    <li>{t("settings.dev2")}</li>
                 </ul>
             </Card>
         </div>

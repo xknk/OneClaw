@@ -1,4 +1,5 @@
 import type { TaskRecord, TaskStatus, TaskTemplateSummary } from "./types";
+import type { UiLocale } from "@/locale/types";
 
 const TOKEN_KEY = "oneclaw.webchat.token";
 
@@ -38,6 +39,8 @@ async function parseError(res: Response, bodyText: string): Promise<string> {
 
 export type AuthStatusResponse = {
     webchatTokenRequired: boolean;
+    /** 网关 ONECLAW_UI_LOCALE，供 Web 默认界面语言 */
+    uiLocale: UiLocale;
 };
 
 /**
@@ -49,7 +52,11 @@ export async function apiAuthStatus(): Promise<AuthStatusResponse> {
     if (!res.ok) {
         throw new Error(await parseError(res, text));
     }
-    return JSON.parse(text) as AuthStatusResponse;
+    const j = JSON.parse(text) as Partial<AuthStatusResponse>;
+    return {
+        webchatTokenRequired: Boolean(j.webchatTokenRequired),
+        uiLocale: j.uiLocale === "en" ? "en" : "zh",
+    };
 }
 
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -177,6 +184,135 @@ export async function apiTaskNote(
 
 export async function apiTaskTemplates(): Promise<{ templates: TaskTemplateSummary[] }> {
     return apiJson<{ templates: TaskTemplateSummary[] }>("/api/task-templates");
+}
+
+export type WorkspacePaths = {
+    dataDir: string;
+    configDir: string;
+    skillsDir: string;
+    userWorkspaceDir: string;
+    projectRootDir: string;
+    mcpServersFile: string;
+    taskTemplatesFile: string;
+    agentsRegistryFile: string;
+    skillsJsonDir: string;
+};
+
+export async function apiWorkspacePaths(): Promise<WorkspacePaths> {
+    return apiJson<WorkspacePaths>("/api/workspace/paths");
+}
+
+export type McpWorkspaceGet = {
+    filePath: string;
+    configs: unknown[];
+    raw: unknown[];
+};
+
+export async function apiWorkspaceMcpGet(): Promise<McpWorkspaceGet> {
+    return apiJson<McpWorkspaceGet>("/api/workspace/mcp");
+}
+
+export async function apiWorkspaceMcpPut(raw: unknown[]): Promise<{ ok: boolean; filePath: string }> {
+    return apiJson("/api/workspace/mcp", {
+        method: "PUT",
+        body: JSON.stringify(raw),
+    });
+}
+
+export type TaskTemplatesWorkspaceGet = {
+    filePath: string;
+    templates: unknown[];
+    builtInTemplateIds: string[];
+    fileExists: boolean;
+};
+
+export async function apiWorkspaceTaskTemplatesGet(): Promise<TaskTemplatesWorkspaceGet> {
+    return apiJson<TaskTemplatesWorkspaceGet>("/api/workspace/task-templates");
+}
+
+export async function apiWorkspaceTaskTemplatesPut(templates: unknown[]): Promise<{ ok: boolean }> {
+    return apiJson("/api/workspace/task-templates", {
+        method: "PUT",
+        body: JSON.stringify({ templates }),
+    });
+}
+
+export async function apiWorkspaceSkillsList(): Promise<{ dir: string; files: string[] }> {
+    return apiJson("/api/workspace/skills");
+}
+
+export async function apiWorkspaceSkillGet(name: string): Promise<string> {
+    const res = await fetch(`/api/workspace/skills/${encodeURIComponent(name)}`, {
+        headers: buildHeaders(),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+        throw new Error(await parseError(res, text));
+    }
+    return text;
+}
+
+export async function apiWorkspaceSkillPut(name: string, body: unknown): Promise<void> {
+    await apiJson(`/api/workspace/skills/${encodeURIComponent(name)}`, {
+        method: "PUT",
+        body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+}
+
+export async function apiWorkspaceSkillDelete(name: string): Promise<void> {
+    const res = await fetch(`/api/workspace/skills/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+        headers: buildHeaders(),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+        throw new Error(await parseError(res, text));
+    }
+}
+
+export async function apiWorkspaceAgentsGet(): Promise<{
+    filePath: string;
+    exists: boolean;
+    registry: unknown;
+}> {
+    return apiJson("/api/workspace/agents");
+}
+
+export async function apiWorkspaceAgentsPut(registry: unknown): Promise<void> {
+    await apiJson("/api/workspace/agents", {
+        method: "PUT",
+        body: JSON.stringify(registry),
+    });
+}
+
+export async function apiWorkspaceSessionsList(agentId?: string): Promise<{
+    agentId: string;
+    sessions: { sessionKey: string; sessionId: string; updatedAt: string }[];
+}> {
+    const q = agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
+    return apiJson(`/api/workspace/sessions${q}`);
+}
+
+export async function apiWorkspaceSessionDelete(body: {
+    sessionKey: string;
+    agentId?: string;
+}): Promise<void> {
+    await apiJson("/api/workspace/sessions", {
+        method: "DELETE",
+        body: JSON.stringify(body),
+    });
+}
+
+export async function apiDeleteTask(taskId: string): Promise<void> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        method: "DELETE",
+        headers: buildHeaders(),
+    });
+    if (res.status === 204) {
+        return;
+    }
+    const text = await res.text();
+    throw new Error(await parseError(res, text));
 }
 
 export async function apiTaskPlan(

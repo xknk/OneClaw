@@ -3,9 +3,10 @@ import { stdin as input, stdout as output } from "node:process";
 import type { CompleterResult } from "node:readline";
 import type { UnifiedInboundMessage } from "@/channels/unifiedMessage";
 import { handleUnifiedChat } from "@/server/chatProcessing";
-import { appConfig, ollamaConfig } from "@/config/evn";
-import { SLASH_COMMAND_ENTRIES } from "@/cli/slashCommands";
+import { appConfig } from "@/config/evn";
+import { getSlashCommandEntries } from "@/cli/slashCommands";
 import { runTerminalSlash } from "@/cli/terminalCommandRunner";
+import * as T from "@/tui/tuiStrings";
 
 export interface ReplOptions {
     sessionKey?: string;
@@ -14,9 +15,8 @@ export interface ReplOptions {
     verbose?: boolean;
 }
 
-const SLASH_COMMANDS = SLASH_COMMAND_ENTRIES.map((e) => e.cmd);
-
 function replCompleter(line: string): CompleterResult {
+    const SLASH_COMMANDS = getSlashCommandEntries(appConfig.uiLocale).map((e) => e.cmd);
     const m = line.match(/^(\s*)(\/\S*)$/);
     if (!m) return [[], line];
     const ws = m[1];
@@ -31,37 +31,11 @@ function printReplHelp(opts: {
     taskId?: string;
     verbose: boolean;
 }): void {
-    const lines = [
-        "内置命令:",
-        "  /help, /?         显示本帮助",
-        "  /session <key>     切换会话键（仅影响未带 --task 时的转录）",
-        "  /clear             清屏（不清对话历史）",
-        "  /status            当前 REPL 与会话目录、模型等摘要",
-        "  /onboard           运行初始化",
-        "  /doctor            运行系统自检",
-        "  /task ...          执行任务命令（同 pnpm cli task ...）",
-        "  /trace ...         执行 trace 命令（同 pnpm cli trace ...）",
-        "  /exit, /quit       退出",
-        "",
-        "行首输入 `/` 后按 Tab 可补全上述命令；单独输入 `/` 回车可列出命令。",
-        "",
-        "启动参数（pnpm cli repl …）:",
-        "  --session <key>    初始会话键，默认 cli",
-        "  --agent <id>       Agent ID",
-        "  --task <taskId>    关联任务（转录固定为 task:<id>）",
-        "  -v, --verbose      stderr 打印 traceId / metadata",
-        "",
-        "提示: 与 pnpm dev 同时开时，勿与 Web 共用同一 sessionKey。",
-    ];
-    if (opts.taskId) {
-        lines.push(
-            "",
-            `当前: 已关联 --task ${opts.taskId}，转录键 task:${opts.taskId}（与 sessionKey=${opts.sessionKey} 并存）。`
-        );
-    }
-    console.log(lines.join("\n"));
+    const loc = appConfig.uiLocale;
+    console.log(T.tuiHelpLines(loc, { sessionKey: opts.sessionKey, taskId: opts.taskId }));
+    console.log(T.replHelpAppend(loc));
     if (opts.verbose) {
-        console.log("当前: verbose=开。");
+        console.log(loc === "en" ? "verbose: on." : "当前: verbose=开。");
     }
 }
 
@@ -71,21 +45,7 @@ function printStatus(opts: {
     taskId?: string;
     verbose: boolean;
 }): void {
-    console.log(
-        [
-            "REPL 状态:",
-            `  sessionKey: ${opts.sessionKey}`,
-            `  agentId: ${opts.agentId ?? "(未指定)"}`,
-            `  taskId: ${opts.taskId ?? "(未指定)"}`,
-            `  verbose: ${opts.verbose}`,
-            "",
-            "配置摘要:",
-            `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
-            `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
-            `  skillsDir → ${appConfig.skillsDir}`,
-            `  Ollama → ${ollamaConfig.baseUrl} · model ${ollamaConfig.modelName}`,
-        ].join("\n")
-    );
+    console.log(T.replStatusLines(appConfig.uiLocale, opts));
 }
 
 /**
@@ -107,14 +67,16 @@ export async function runRepl(opts: ReplOptions = {}): Promise<void> {
     });
 
     console.log(
-        `OneClaw REPL · sessionKey=${state.sessionKey}` +
-            (state.agentId ? ` · agentId=${state.agentId}` : "") +
-            (state.taskId ? ` · taskId=${state.taskId}` : "")
+        T.replBannerLine(appConfig.uiLocale, {
+            sessionKey: state.sessionKey,
+            agentId: state.agentId,
+            taskId: state.taskId,
+        }),
     );
-    console.log("输入消息回车发给模型；/help 帮助；行首 `/` + Tab 补全；/exit 退出。\n");
+    console.log(T.replPromptLine(appConfig.uiLocale));
 
     const onSigInt = (): void => {
-        console.log("\n[repl] 已退出（SIGINT）");
+        console.log(T.replSigint(appConfig.uiLocale));
         rl.close();
         process.exit(0);
     };
@@ -129,9 +91,10 @@ export async function runRepl(opts: ReplOptions = {}): Promise<void> {
             if (text === "/exit" || text === "/quit") break;
 
             if (text === "/") {
+                const rows = getSlashCommandEntries(appConfig.uiLocale);
+                const header = appConfig.uiLocale === "en" ? "Commands:\n" : "可用命令:\n";
                 console.log(
-                    "可用命令:\n" +
-                        SLASH_COMMAND_ENTRIES.map((e) => `  ${e.cmd.padEnd(12)} ${e.desc}`).join("\n")
+                    header + rows.map((e) => `  ${e.cmd.padEnd(12)} ${e.desc}`).join("\n"),
                 );
                 continue;
             }
@@ -160,19 +123,20 @@ export async function runRepl(opts: ReplOptions = {}): Promise<void> {
                 continue;
             }
 
+            if (text === "/workspace") {
+                const { tuiWorkspaceLines } = await import("@/tui/tuiStrings");
+                console.log(tuiWorkspaceLines(appConfig.uiLocale));
+                continue;
+            }
+
             if (text.startsWith("/session")) {
                 const rest = text.slice("/session".length).trim();
                 if (!rest) {
-                    console.error("用法: /session <key>");
+                    console.error(T.replSessionUsage(appConfig.uiLocale));
                     continue;
                 }
                 state.sessionKey = rest;
-                console.log(`已切换 sessionKey=${state.sessionKey}`);
-                if (state.taskId) {
-                    console.log(
-                        "（提示：当前仍带 --task，实际转录键仍为 task:<taskId>。）"
-                    );
-                }
+                console.log(T.replSessionSwitchedMsg(appConfig.uiLocale, state.sessionKey, state.taskId));
                 continue;
             }
 
@@ -182,7 +146,7 @@ export async function runRepl(opts: ReplOptions = {}): Promise<void> {
                     console.log(out);
                     continue;
                 }
-                console.error("未知命令。输入 /help 或 `/` + Tab。");
+                console.error(T.replUnknown(appConfig.uiLocale));
                 continue;
             }
 

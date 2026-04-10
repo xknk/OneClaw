@@ -24,10 +24,10 @@ export function saveConversations(userId: string, list: Conversation[]): void {
     localStorage.setItem(keyForUser(userId), JSON.stringify(list));
 }
 
-export function createEmptyConversation(): Conversation {
+export function createEmptyConversation(defaultTitle: string): Conversation {
     return {
         id: crypto.randomUUID(),
-        title: "新对话",
+        title: defaultTitle,
         sessionKey: `u-${crypto.randomUUID()}`,
         agentId: "main",
         intent: "",

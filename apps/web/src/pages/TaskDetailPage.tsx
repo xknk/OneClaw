@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
     apiGetTask,
@@ -14,6 +14,8 @@ import {
     downloadTaskExport,
 } from "@/api/client";
 import type { TaskRecord, TaskStatus } from "@/api/types";
+import { formatDateTime } from "@/lib/formatDateTime";
+import { useLocale } from "@/locale/LocaleContext";
 import { Button, Card, Input, Select, TextArea, StatusBadge } from "@/components/ui";
 
 const ALL_STATUS: TaskStatus[] = [
@@ -30,8 +32,16 @@ const ALL_STATUS: TaskStatus[] = [
 ];
 
 export function TaskDetailPage() {
+    const { locale, t } = useLocale();
     const { taskId: rawId } = useParams();
     const taskId = rawId ? decodeURIComponent(rawId) : "";
+    const defaultPlanJson = useMemo(
+        () =>
+            locale === "en"
+                ? '[{"index":0,"title":"Step","intent":"chat"}]'
+                : '[{"index":0,"title":"步骤","intent":"chat"}]',
+        [locale],
+    );
     const [task, setTask] = useState<TaskRecord | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -40,9 +50,7 @@ export function TaskDetailPage() {
     const [transTo, setTransTo] = useState<TaskStatus>("running");
     const [transReason, setTransReason] = useState("");
     const [noteText, setNoteText] = useState("");
-    const [planJson, setPlanJson] = useState(
-        '[{"index":0,"title":"步骤","intent":"chat"}]',
-    );
+    const [planJson, setPlanJson] = useState(defaultPlanJson);
     const [reviewOutcome, setReviewOutcome] = useState<"pass" | "fail">("pass");
     const [reviewSummary, setReviewSummary] = useState("");
     const [reviewFindings, setReviewFindings] = useState("");
@@ -57,19 +65,38 @@ export function TaskDetailPage() {
         setError(null);
         setLoading(true);
         try {
-            const t = await apiGetTask(taskId);
-            setTask(t);
+            const rec = await apiGetTask(taskId);
+            setTask(rec);
         } catch (e) {
-            setError(e instanceof Error ? e.message : "加载失败");
+            setError(e instanceof Error ? e.message : t("task.loadFail"));
             setTask(null);
         } finally {
             setLoading(false);
         }
-    }, [taskId]);
+    }, [taskId, t]);
 
     useEffect(() => {
         void load();
     }, [load]);
+
+    /** 切换任务时清空 Planner 文本框，避免沿用上一任务的计划内容 */
+    useEffect(() => {
+        setPlanJson(defaultPlanJson);
+    }, [taskId, defaultPlanJson]);
+
+    /** 从服务端任务单据同步 Planner 文本框（仅当有已保存计划时覆盖；须与路由 taskId 一致以防切换任务时串数据） */
+    useEffect(() => {
+        if (!task || task.taskId !== taskId) {
+            return;
+        }
+        const raw = task.meta?.v4_plan;
+        if (raw && typeof raw === "object" && raw !== null && "steps" in raw) {
+            const steps = (raw as { steps?: unknown }).steps;
+            if (Array.isArray(steps) && steps.length > 0) {
+                setPlanJson(JSON.stringify(steps, null, 2));
+            }
+        }
+    }, [task, taskId]);
 
     const flash = (m: string) => {
         setMsg(m);
@@ -80,19 +107,19 @@ export function TaskDetailPage() {
         setError(null);
         try {
             await fn();
-            flash("已保存");
+            flash(t("task.saved"));
             await load();
         } catch (e) {
-            setError(e instanceof Error ? e.message : "操作失败");
+            setError(e instanceof Error ? e.message : t("task.opFail"));
         }
     };
 
     if (!taskId) {
-        return <p className="text-slate-500">缺少 taskId</p>;
+        return <p className="text-slate-500">{t("task.missingId")}</p>;
     }
 
     if (loading && !task) {
-        return <p className="text-slate-500">加载中…</p>;
+        return <p className="text-slate-500">{t("task.loading")}</p>;
     }
 
     if (error && !task) {
@@ -100,7 +127,7 @@ export function TaskDetailPage() {
             <div className="space-y-4">
                 <p className="text-rose-400">{error}</p>
                 <Link to="/tasks" className="text-claw-400 hover:underline">
-                    返回列表
+                    {t("task.backList")}
                 </Link>
             </div>
         );
@@ -114,7 +141,7 @@ export function TaskDetailPage() {
         <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <Link to="/tasks" className="text-sm text-claw-400 hover:underline">
-                    ← 任务列表
+                    {t("task.listLink")}
                 </Link>
                 {msg && <span className="text-xs text-claw-300">{msg}</span>}
             </div>
@@ -122,18 +149,27 @@ export function TaskDetailPage() {
             <Card className="p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                        <h2 className="text-lg font-semibold text-white">{task.title}</h2>
+                        <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{task.title}</h2>
                         <p className="font-mono text-xs text-slate-500">{task.taskId}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                            {t("task.created")} {formatDateTime(task.createdAt, locale)} · {t("task.updated")}{" "}
+                            {formatDateTime(task.updatedAt, locale)}
+                        </p>
                     </div>
-                    <StatusBadge status={task.status} />
+                    <StatusBadge status={task.status} label={t(`taskStatus.${task.status}`)} />
                 </div>
                 {task.failureReason && (
-                    <p className="mt-2 text-sm text-rose-300">失败原因：{task.failureReason}</p>
+                    <p className="mt-2 text-sm text-rose-300">
+                        {t("task.failure")}
+                        {task.failureReason}
+                    </p>
                 )}
                 {task.checkpoint && (
                     <p className="mt-2 text-xs text-slate-400">
-                        检查点：step {task.checkpoint.stepIndex}
+                        {t("task.checkpoint")}
+                        {task.checkpoint.stepIndex}
                         {task.checkpoint.label ? ` · ${task.checkpoint.label}` : ""}
+                        {task.checkpoint.at ? ` · ${formatDateTime(task.checkpoint.at, locale)}` : ""}
                     </p>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -146,7 +182,7 @@ export function TaskDetailPage() {
                             })
                         }
                     >
-                        导出 JSON
+                        {t("task.exportJson")}
                     </Button>
                     <Button
                         type="button"
@@ -157,7 +193,7 @@ export function TaskDetailPage() {
                             })
                         }
                     >
-                        导出 Markdown
+                        {t("task.exportMd")}
                     </Button>
                 </div>
             </Card>
@@ -165,11 +201,11 @@ export function TaskDetailPage() {
             {error && <p className="text-sm text-rose-400">{error}</p>}
 
             <Card className="p-4">
-                <h3 className="text-sm font-semibold text-white">状态迁移</h3>
-                <p className="text-xs text-slate-500">POST /api/tasks/:id/transition</p>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.transition")}</h3>
+                <p className="text-xs text-slate-500">{t("task.transitionHint")}</p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <label className="block text-xs text-slate-400">
-                        目标状态
+                        {t("task.targetStatus")}
                         <Select
                             className="mt-1"
                             value={transTo}
@@ -177,13 +213,13 @@ export function TaskDetailPage() {
                         >
                             {ALL_STATUS.map((s) => (
                                 <option key={s} value={s}>
-                                    {s}
+                                    {t(`taskStatus.${s}`)}
                                 </option>
                             ))}
                         </Select>
                     </label>
                     <label className="block text-xs text-slate-400 sm:col-span-2">
-                        原因（可选）
+                        {t("task.reasonOpt")}
                         <TextArea
                             className="mt-1"
                             value={transReason}
@@ -205,12 +241,12 @@ export function TaskDetailPage() {
                         })
                     }
                 >
-                    提交迁移
+                    {t("task.submitTrans")}
                 </Button>
             </Card>
 
             <Card className="p-4">
-                <h3 className="text-sm font-semibold text-white">快捷操作</h3>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.quick")}</h3>
                 <div className="mt-3 flex flex-wrap gap-2">
                     <Button
                         type="button"
@@ -222,7 +258,7 @@ export function TaskDetailPage() {
                             })
                         }
                     >
-                        取消
+                        {t("task.cancel")}
                     </Button>
                     <Button
                         type="button"
@@ -234,7 +270,7 @@ export function TaskDetailPage() {
                             })
                         }
                     >
-                        重试
+                        {t("task.retry")}
                     </Button>
                     <Button
                         type="button"
@@ -246,11 +282,11 @@ export function TaskDetailPage() {
                             })
                         }
                     >
-                        运行
+                        {t("task.run")}
                     </Button>
                 </div>
                 <label className="mt-3 block text-xs text-slate-400">
-                    run 的 traceId（可选）
+                    {t("task.runTrace")}
                     <Input
                         className="mt-1"
                         value={runTrace}
@@ -260,8 +296,8 @@ export function TaskDetailPage() {
             </Card>
 
             <Card className="p-4">
-                <h3 className="text-sm font-semibold text-white">从检查点恢复</h3>
-                <p className="text-xs text-slate-500">POST /api/tasks/:id/resume</p>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.resume")}</h3>
+                <p className="text-xs text-slate-500">{t("task.resumeHint")}</p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <label className="block text-xs text-slate-400">
                         stepIndex
@@ -273,7 +309,7 @@ export function TaskDetailPage() {
                         />
                     </label>
                     <label className="block text-xs text-slate-400">
-                        label（可选）
+                        {t("task.labelOpt")}
                         <Input
                             className="mt-1"
                             value={resumeLabel}
@@ -281,7 +317,7 @@ export function TaskDetailPage() {
                         />
                     </label>
                     <label className="block text-xs text-slate-400 sm:col-span-2">
-                        payload JSON（可选）
+                        {t("task.payloadOpt")}
                         <TextArea
                             className="mt-1 font-mono text-xs"
                             value={resumePayload}
@@ -303,7 +339,7 @@ export function TaskDetailPage() {
                                         ? (p as Record<string, unknown>)
                                         : undefined;
                             } catch {
-                                throw new Error("payload 不是合法 JSON 对象");
+                                throw new Error(t("task.errPayloadJson"));
                             }
                             const r = await apiTaskResume(task.taskId, {
                                 stepIndex: Number(resumeStep),
@@ -314,18 +350,18 @@ export function TaskDetailPage() {
                         })
                     }
                 >
-                    恢复
+                    {t("task.resumeBtn")}
                 </Button>
             </Card>
 
             <Card className="p-4">
-                <h3 className="text-sm font-semibold text-white">时间轴备注</h3>
-                <p className="text-xs text-slate-500">POST /api/tasks/:id/note</p>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.noteTitle")}</h3>
+                <p className="text-xs text-slate-500">{t("task.noteHint")}</p>
                 <TextArea
                     className="mt-3"
                     value={noteText}
                     onChange={(e) => setNoteText(e.target.value)}
-                    placeholder="备注内容"
+                    placeholder={t("task.notePh")}
                     rows={3}
                 />
                 <Button
@@ -339,13 +375,13 @@ export function TaskDetailPage() {
                         })
                     }
                 >
-                    添加备注
+                    {t("task.addNote")}
                 </Button>
             </Card>
 
             <Card className="p-4">
-                <h3 className="text-sm font-semibold text-white">Planner 计划</h3>
-                <p className="text-xs text-slate-500">POST /api/tasks/:id/plan · steps 为 JSON 数组</p>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.planner")}</h3>
+                <p className="text-xs text-slate-500">{t("task.plannerHint")}</p>
                 <TextArea
                     className="mt-3 font-mono text-xs"
                     value={planJson}
@@ -363,13 +399,19 @@ export function TaskDetailPage() {
                         })
                     }
                 >
-                    提交计划
+                    {t("task.submitPlan")}
                 </Button>
             </Card>
 
             <Card className="p-4">
-                <h3 className="text-sm font-semibold text-white">Review 结论</h3>
-                <p className="text-xs text-slate-500">POST /api/tasks/:id/review</p>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.review")}</h3>
+                <p className="text-xs text-slate-500">{t("task.reviewHint")}</p>
+                <p className="mt-2 text-xs leading-relaxed text-slate-400">{t("task.reviewExplain")}</p>
+                {task.status !== "review" && (
+                    <p className="mt-2 rounded-lg border border-amber-900/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-100/90">
+                        {t("task.reviewBlocked", { status: t(`taskStatus.${task.status}`) })}
+                    </p>
+                )}
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <label className="block text-xs text-slate-400">
                         outcome
@@ -378,21 +420,22 @@ export function TaskDetailPage() {
                             value={reviewOutcome}
                             onChange={(e) => setReviewOutcome(e.target.value as "pass" | "fail")}
                         >
-                            <option value="pass">pass</option>
-                            <option value="fail">fail</option>
+                            <option value="pass">{t("task.reviewOutcomePass")}</option>
+                            <option value="fail">{t("task.reviewOutcomeFail")}</option>
                         </Select>
                     </label>
                     <label className="block text-xs text-slate-400 sm:col-span-2">
-                        summary
+                        {t("task.summaryReq")}
                         <TextArea
                             className="mt-1"
                             value={reviewSummary}
                             onChange={(e) => setReviewSummary(e.target.value)}
+                            placeholder={t("task.summaryPh")}
                             rows={2}
                         />
                     </label>
                     <label className="block text-xs text-slate-400 sm:col-span-2">
-                        findings（JSON 或任意文本）
+                        {t("task.findings")}
                         <TextArea
                             className="mt-1"
                             value={reviewFindings}
@@ -404,8 +447,13 @@ export function TaskDetailPage() {
                 <Button
                     type="button"
                     className="mt-3"
+                    disabled={task.status !== "review"}
                     onClick={() =>
                         void run(async () => {
+                            const summary = reviewSummary.trim();
+                            if (!summary) {
+                                throw new Error(t("task.errSummary"));
+                            }
                             let findings: unknown = reviewFindings;
                             try {
                                 findings = JSON.parse(reviewFindings);
@@ -414,23 +462,23 @@ export function TaskDetailPage() {
                             }
                             const r = await apiTaskReview(task.taskId, {
                                 outcome: reviewOutcome,
-                                summary: reviewSummary,
+                                summary,
                                 findings,
                             });
                             setTask(r);
                         })
                     }
                 >
-                    提交评审
+                    {t("task.submitReview")}
                 </Button>
             </Card>
 
             <Card className="p-4">
-                <h3 className="text-sm font-semibold text-white">人工批准</h3>
-                <p className="text-xs text-slate-500">POST /api/tasks/:id/approve</p>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.approve")}</h3>
+                <p className="text-xs text-slate-500">{t("task.approveHint")}</p>
                 <Input
                     className="mt-3"
-                    placeholder="comment（可选）"
+                    placeholder={t("task.approvePh")}
                     value={approveComment}
                     onChange={(e) => setApproveComment(e.target.value)}
                 />
@@ -447,12 +495,12 @@ export function TaskDetailPage() {
                         })
                     }
                 >
-                    批准
+                    {t("task.approveBtn")}
                 </Button>
             </Card>
 
             <Card className="p-4">
-                <h3 className="text-sm font-semibold text-white">时间轴</h3>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.timeline")}</h3>
                 <ul className="mt-3 max-h-80 space-y-2 overflow-y-auto text-xs text-slate-400">
                     {task.timeline
                         .slice()
@@ -460,19 +508,26 @@ export function TaskDetailPage() {
                         .map((e, i) => (
                             <li
                                 key={`${e.at}-${i}`}
-                                className="rounded-lg border border-slate-800/80 bg-slate-900/40 p-2"
+                                className="rounded-lg border border-slate-200/90 bg-slate-50 p-2 dark:border-slate-800/80 dark:bg-slate-900/40"
                             >
-                                <span className="text-slate-500">[{e.kind}]</span> {e.at}
+                                <span className="text-slate-500">[{e.kind}]</span>{" "}
+                                <time
+                                    className="text-slate-400"
+                                    dateTime={e.at}
+                                    title={e.at}
+                                >
+                                    {formatDateTime(e.at, locale)}
+                                </time>
                                 {e.kind === "note" && (
-                                    <pre className="mt-1 whitespace-pre-wrap text-slate-300">{e.text}</pre>
+                                    <pre className="mt-1 whitespace-pre-wrap text-slate-700 dark:text-slate-300">{e.text}</pre>
                                 )}
                                 {e.kind === "transition" && (
-                                    <p className="mt-1 text-slate-300">
-                                        {e.from} → {e.to}
+                                    <p className="mt-1 text-slate-700 dark:text-slate-300">
+                                        {t(`taskStatus.${e.from}`)} → {t(`taskStatus.${e.to}`)}
                                     </p>
                                 )}
                                 {e.kind === "step" && (
-                                    <p className="mt-1 text-slate-300">
+                                    <p className="mt-1 text-slate-700 dark:text-slate-300">
                                         step {e.stepIndex}
                                         {e.label ? ` · ${e.label}` : ""}
                                         {e.summary ? ` — ${e.summary}` : ""}

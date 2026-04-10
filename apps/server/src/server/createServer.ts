@@ -21,6 +21,7 @@ import type { OneBotMessageEvent } from "@/channels/qq/oneBotTypes";
 import { isBotMentioned } from "@/channels/qq/isBotMentioned";
 import { handleUnifiedChat, DEFAULT_SESSION_KEY } from "./chatProcessing";
 import { registerTaskRoutes } from "./taskRoutes";
+import { registerWorkspaceRoutes } from "./workspaceRoutes";
 
 /**
  * 解析已构建的前端静态目录（apps/web/dist），可通过 ONECLAW_WEB_DIST 覆盖。
@@ -52,6 +53,7 @@ export function createServer() {
     app.get("/api/auth/status", (_req, res) => {
         res.json({
             webchatTokenRequired: Boolean(appConfig.webchatToken?.trim()),
+            uiLocale: appConfig.uiLocale,
         });
     });
 
@@ -180,6 +182,7 @@ export function createServer() {
         }
     });
     registerTaskRoutes(app);
+    registerWorkspaceRoutes(app);
 
     if (webDist && fs.existsSync(path.join(webDist, "index.html"))) {
         app.use((req, res, next) => {

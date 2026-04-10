@@ -82,7 +82,7 @@ let cachedBindings: AgentBindingRule[] = DEFAULT_BINDINGS;
  * 获取配置文件路径
  * 默认在 workspace 的 skills/agents/agents.json
  */
-function registryPath(): string {
+export function getAgentRegistryPath(): string {
     return path.join(appConfig.skillsDir, "agents", "agents.json");
 }
 
@@ -136,7 +136,7 @@ function normalizeBindings(raw: unknown): AgentBindingRule[] {
  * 逻辑：读取文件 -> 解析 JSON -> 过滤校验 -> 与默认配置合并（文件配置覆盖默认）
  */
 export async function loadAgentRegistryFromWorkspace(): Promise<void> {
-    const p = registryPath();
+    const p = getAgentRegistryPath();
     try {
         const text = await fs.readFile(p, "utf-8"); // 读取文件内容
         const json = JSON.parse(text) as AgentRegistryFile; // 解析 JSON

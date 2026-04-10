@@ -14,12 +14,15 @@ import {
     setToken as saveToken,
 } from "@/api/client";
 import { ensureRegistered } from "@/lib/localUser";
+import type { UiLocale } from "@/locale/types";
 
 type AuthContextValue = {
     /** 已拉取 /api/auth/status */
     ready: boolean;
     /** 服务端是否配置了 WEBCHAT_TOKEN */
     webchatTokenRequired: boolean;
+    /** 服务端 ONECLAW_UI_LOCALE（浏览器未保存偏好时使用） */
+    serverUiLocale: UiLocale;
     /** 本地是否存有令牌（有即视为已「登录」并带令牌） */
     hasToken: boolean;
     /** 服务端未配置 WEBCHAT_TOKEN，API 可不带头访问 */
@@ -34,15 +37,18 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [ready, setReady] = useState(false);
     const [webchatTokenRequired, setWebchatTokenRequired] = useState(true);
+    const [serverUiLocale, setServerUiLocale] = useState<UiLocale>("zh");
     const [tokenVersion, setTokenVersion] = useState(0);
 
     const refreshStatus = useCallback(async () => {
         try {
             const s = await apiAuthStatus();
             setWebchatTokenRequired(s.webchatTokenRequired);
+            setServerUiLocale(s.uiLocale);
         } catch {
             // 不因探测失败阻塞界面：网关未启动或代理异常时按「开放」处理，发消息时再报错
             setWebchatTokenRequired(false);
+            setServerUiLocale("zh");
         } finally {
             setReady(true);
         }
@@ -68,6 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return {
             ready,
             webchatTokenRequired,
+            serverUiLocale,
             hasToken: tok,
             isGuestAllowed: !webchatTokenRequired,
             refreshStatus,
@@ -77,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, [
         ready,
         webchatTokenRequired,
+        serverUiLocale,
         tokenVersion,
         refreshStatus,
         login,

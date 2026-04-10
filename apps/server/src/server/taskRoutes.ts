@@ -4,6 +4,7 @@ import {
     appendTimelineNote,
     cancelTask,
     createTask,
+    deleteTaskPermanently,
     getTask,
     listTasks,
     parseTaskStatus,
@@ -91,6 +92,20 @@ export function registerTaskRoutes(app: express.Application): void {
             res.status(500).json({
                 error: err instanceof Error ? err.message : "服务器内部错误",
             });
+        }
+    });
+    /**
+     * 永久删除任务记录（管理端 / 清理）
+     */
+    app.delete("/api/tasks/:taskId", async (req, res) => {
+        try {
+            await deleteTaskPermanently(req.params.taskId);
+            res.status(204).send();
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : "服务器内部错误";
+            const code = msg.includes("不存在") ? 404 : 500;
+            if (code === 500) console.error("/api/tasks DELETE:", redactForLog(err));
+            res.status(code).json({ error: msg });
         }
     });
     /**

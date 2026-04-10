@@ -7,7 +7,13 @@ import type {
     TaskStatus,
     TransitionTaskInput,
 } from "./types";
-import { listTasks as listTasksFromStore, newTaskId, readTask, writeTask } from "./taskStore";
+import {
+    listTasks as listTasksFromStore,
+    newTaskId,
+    readTask,
+    writeTask,
+    deleteTaskFile,
+} from "./taskStore";
 import { mergeCreateInputWithTemplate } from "./templates";
 import {
     META_LAST_FAILURE_CONTEXT_KEY,
@@ -59,6 +65,12 @@ export async function createTask(input: CreateTaskInput = {}): Promise<TaskRecor
 /** 获取单个任务详情 */
 export async function getTask(taskId: string): Promise<TaskRecord | null> {
     return readTask(taskId.trim());
+}
+
+/** 从磁盘删除任务记录（不可恢复） */
+export async function deleteTaskPermanently(taskId: string): Promise<void> {
+    const ok = await deleteTaskFile(taskId);
+    if (!ok) throw new Error("任务不存在");
 }
 
 /** 获取任务列表（直接透传查询条件给存储层） */
@@ -291,7 +303,8 @@ export interface PrepareTaskForChatResult {
     /**
      * 钩子激活开关。
      * true: 允许 Agent 在回复后向任务时间线写入“已回复”或“执行中”等记录。
-     * false: 任务已结束（完成/取消），禁止任何写入操作。
+     * false: 无任务或已取消等，不向时间线写入。
+     * 注意：任务为 done 时可为 true 且配合 notesOnly，仅追加时间线备注而不改任务主状态。
      */
     hooksEnabled: boolean;
 
@@ -317,8 +330,11 @@ export async function prepareTaskForChatRound(taskId: string): Promise<PrepareTa
         return { record: null, hooksEnabled: false, notesOnly: false };
     }
 
-    // 2. 终态拦截：任务已经“做完了”或“取消了”，不执行任何状态变更，且关闭写入钩子
-    if (t.status === "done" || t.status === "cancelled") {
+    // 2. 终态拦截：已完成任务仍允许向时间线追加记录（仅备注，不改状态），便于后续对话与工具可在时间轴追溯
+    if (t.status === "done") {
+        return { record: t, hooksEnabled: true, notesOnly: true };
+    }
+    if (t.status === "cancelled") {
         return { record: t, hooksEnabled: false, notesOnly: false };
     }
 

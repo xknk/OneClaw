@@ -14,6 +14,10 @@ function getSessionsDir(agentId:string  = agentIdKey): string {
     return path.join(appConfig.dataDir, "agents", agentId , "sessions");
 }
 
+function transcriptPathForSession(sessionId: string, agentId: string): string {
+    return path.join(getSessionsDir(agentId), `${sessionId}.jsonl`);
+}
+
 /** 获取 JSON 文件的完整路径：.../sessions/sessions.json */
 function getStorePath(agentId:string = agentIdKey): string {
     return path.join(getSessionsDir(agentId), "sessions.json");
@@ -97,4 +101,41 @@ export async function touchSession(sessionKey: SessionKey, agentId:string = agen
         entry.updatedAt = new Date().toISOString();
         await writeStore(store);
     }
+}
+
+export type SessionListEntry = {
+    sessionKey: string;
+    sessionId: string;
+    updatedAt: string;
+};
+
+/**
+ * 列出当前 Agent 下所有会话键（用于管理端展示）。
+ */
+export async function listSessionEntries(agentId: string = agentIdKey): Promise<SessionListEntry[]> {
+    const store = await readStore(agentId);
+    return Object.entries(store).map(([sessionKey, v]) => ({
+        sessionKey,
+        sessionId: v.sessionId,
+        updatedAt: v.updatedAt,
+    }));
+}
+
+/**
+ * 删除会话映射并尽量删除对应 .jsonl 转录文件（不存在则忽略）。
+ */
+export async function deleteSessionEntry(sessionKey: SessionKey, agentId: string = agentIdKey): Promise<boolean> {
+    const store = await readStore(agentId);
+    const entry = store[sessionKey];
+    if (!entry) return false;
+    const sid = entry.sessionId;
+    delete store[sessionKey];
+    await writeStore(store, agentId);
+    try {
+        await fs.unlink(transcriptPathForSession(sid, agentId));
+    } catch (e) {
+        const code = (e as NodeJS.ErrnoException)?.code;
+        if (code !== "ENOENT") throw e;
+    }
+    return true;
 }

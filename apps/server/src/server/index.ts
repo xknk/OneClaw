@@ -4,9 +4,11 @@
  * 必须先加载 dotenv，再导入任何会读取 process.env 的模块（如 config、llm）。
  */
 import { createServer } from "./createServer";
-import { PORT, appConfig  } from "@/config/evn";
+import { PORT, appConfig } from "@/config/evn";
+import { loadAgentRegistryFromWorkspace } from "@/agent/loadAgentRegistry";
 
 async function main() {
+    await loadAgentRegistryFromWorkspace();
     const app = createServer();
     const host = appConfig.bindHost;
     app.listen(PORT, host,() => {

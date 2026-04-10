@@ -50,6 +50,18 @@ function bool(key: string, defaultValue: boolean): boolean {
     return lower === "1" || lower === "true" || lower === "yes";
 }
 
+/** UI 语言：TUI、Web 默认语言、上下文摘要提示等 */
+export type UiLocale = "zh" | "en";
+
+function uiLocale(key: string, defaultValue: UiLocale): UiLocale {
+    const v = process.env[key];
+    if (v === undefined || v === "") return defaultValue;
+    const lower = String(v).trim().toLowerCase();
+    if (lower === "en" || lower === "en-us" || lower === "english") return "en";
+    if (lower === "zh" || lower === "zh-cn" || lower === "zh-hans" || lower === "chinese") return "zh";
+    return defaultValue;
+}
+
 export const ollamaConfig = {
     baseUrl: str("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
     modelName: str("OLLAMA_MODEL_NAME", "qwen2.5:3b"),
@@ -116,6 +128,8 @@ export const appConfig = {
     mcpListToolsTimeoutMs: num("ONECLAW_MCP_LIST_TOOLS_TIMEOUT_MS", 10_000),
     /** V4 M2：是否启用步骤工具白名单强制执行 */
     m2StepToolEnforcement: bool("ONECLAW_M2_STEP_TOOL_ENFORCEMENT", true),
+    /** 界面语言（TUI、Web 服务端默认值、摘要提示语等） */
+    uiLocale: uiLocale("ONECLAW_UI_LOCALE", "zh"),
 
 } as const;
 
