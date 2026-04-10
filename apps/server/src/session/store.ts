@@ -70,6 +70,8 @@ export async function getOrCreateSessionId(sessionKey: SessionKey, agentId:strin
         entry = {
             sessionId: createSessionId(),
             updatedAt: new Date().toISOString(),
+            archivedMessageCount: 0,
+            rollingSummary: "",
         };
         store[sessionKey] = entry;
         await writeStore(store); // 存入硬盘
@@ -86,9 +88,45 @@ export async function resetSession(sessionKey: SessionKey, agentId:string = agen
     store[sessionKey] = {
         sessionId,
         updatedAt: new Date().toISOString(),
+        archivedMessageCount: 0,
+        rollingSummary: "",
     };
     await writeStore(store);
     return sessionId;
+}
+
+export type RollingState = {
+    rollingSummary: string;
+    archivedMessageCount: number;
+};
+
+export async function getRollingState(
+    sessionKey: SessionKey,
+    agentId: string = agentIdKey
+): Promise<RollingState> {
+    const store = await readStore(agentId);
+    const e = store[sessionKey];
+    if (!e) return { rollingSummary: "", archivedMessageCount: 0 };
+    return {
+        rollingSummary: typeof e.rollingSummary === "string" ? e.rollingSummary : "",
+        archivedMessageCount:
+            typeof e.archivedMessageCount === "number" && e.archivedMessageCount >= 0
+                ? e.archivedMessageCount
+                : 0,
+    };
+}
+
+export async function setRollingState(
+    sessionKey: SessionKey,
+    agentId: string,
+    state: RollingState
+): Promise<void> {
+    const store = await readStore(agentId);
+    const e = store[sessionKey];
+    if (!e) return;
+    e.rollingSummary = state.rollingSummary;
+    e.archivedMessageCount = state.archivedMessageCount;
+    await writeStore(store, agentId);
 }
 
 /** 

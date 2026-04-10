@@ -5,6 +5,9 @@ export type SessionKey = string; // e.g. "main"
 export interface SessionEntry {
     sessionId: string;
     updatedAt: string; // ISO 8601
+    /** 已从转录开头折入滚动摘要的消息条数（仅模型视图，不删 jsonl） */
+    archivedMessageCount?: number;
+    rollingSummary?: string;
 }
 
 /** sessions.json 内容：sessionKey -> SessionEntry */

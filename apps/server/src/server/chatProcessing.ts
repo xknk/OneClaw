@@ -4,9 +4,8 @@ import { getAllTools } from "@/agent/tools";
 import { UnifiedInboundMessage, UnifiedOutboundMessage } from "@/channels/unifiedMessage";
 import { appConfig } from "@/config/evn";
 import { ChatMessage } from "@/llm/model";
-import { trimMessagesToContextLimit } from "@/session/contextLimit";
-import { getOrCreateSessionId, touchSession } from "@/session/store";
-import { summarizeMessages } from "@/session/summarizeContext";
+import { buildMessagesForModel } from "@/session/buildModelContext";
+import { getOrCreateSessionId, getRollingState, setRollingState, touchSession } from "@/session/store";
 import { appendMessage, readMessages } from "@/session/transcript";
 import { SessionKey } from "@/session/type";
 import { loadSkillsForContext } from "@/skills/loadSkills";
@@ -177,20 +176,10 @@ export async function handleUnifiedChat(
 
     const fullMessages: ChatMessage[] = [...history, { role: "user", content: userText }];
 
-    // 上下文压缩逻辑：如果消息太多，将旧消息摘要化，只保留最近的 N 条
-    const maxMessages = appConfig.chatContextMaxMessages ?? 30;
-    const threshold = appConfig.chatSummarizeThreshold ?? 20;
-
-    let messages: ChatMessage[];
-    if (fullMessages.length > threshold) {
-        const recentCount = maxMessages - 1;
-        const oldPart = fullMessages.slice(0, -recentCount);
-        const recent = fullMessages.slice(-recentCount);
-        const summary = await summarizeMessages(oldPart); // 调用 LLM 生成摘要
-        messages = [{ role: "system", content: `【此前对话摘要】\n${summary}` }, ...recent];
-    } else {
-        messages = trimMessagesToContextLimit(fullMessages, { maxMessages });
-    }
+    const rollingIn = await getRollingState(sessionKey, agentId);
+    const built = await buildMessagesForModel(fullMessages, rollingIn);
+    let messages = built.messages;
+    await setRollingState(sessionKey, agentId, built.rolling);
 
     // --- 4. 技能与工具装配 ---
     const prefixBlocks: ChatMessage[] = [];

@@ -80,7 +80,11 @@ export const appConfig = {
     dataDir: _DataDir,
     /** 发给模型的最大消息条数（只保留最近 N 条），避免超出 context 限制 */
     chatContextMaxMessages: num("ONECLAW_CHAT_CONTEXT_MAX_MESSAGES", 30),
-    /** 超过此条数时对“更早部分”做总结，再与最近一段一起发给模型 */
+    /** 对话历史（滚动摘要 + 原文尾）允许的最大估算 token；不含技能/任务等 prefix */
+    chatHistoryMaxTokens: num("ONECLAW_CHAT_HISTORY_MAX_TOKENS", 6000),
+    /** 单条消息超过此估算 token 时在条内从尾部截断 */
+    chatSingleMessageMaxTokens: num("ONECLAW_CHAT_SINGLE_MESSAGE_MAX_TOKENS", 4000),
+    /** @deprecated 已由 token 预算 + 滚动摘要替代；保留读取以兼容旧 .env */
     chatSummarizeThreshold: num("ONECLAW_CHAT_SUMMARIZE_THRESHOLD", 20),
     /** 工作目录路径：AI Agent 操作文件、读取技能（Skills）的根目录。 */
     // workspaceDir: str("ONECLAW_WORKSPACE_DIR", path.join(process.cwd(), "workspace")),

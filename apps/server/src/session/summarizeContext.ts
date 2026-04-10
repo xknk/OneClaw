@@ -34,3 +34,31 @@ export async function summarizeMessages(messages: ChatMessage[]): Promise<string
     ]);
     return summary.trim();
 }
+
+function mergeSystemPrompt(): string {
+    if (appConfig.uiLocale === "en") {
+        return `You merge a running conversation summary with new dialogue lines. Output ONE updated English paragraph. Preserve: constraints, decisions, names, versions, paths, unresolved tasks. Drop filler. Max ~350 words.`;
+    }
+    return `你会把「已有摘要」和「新出现的若干条对话」合并成一段更新后的中文摘要。输出一段即可。必须保留：约束条件、已做决定、专名、版本号、路径、未完成任务。去掉废话。总长度控制在 350 字以内。`;
+}
+
+function mergeUserPrompt(prev: string, batch: ChatMessage[]): string {
+    const block = batch.map((m) => `[${m.role}]: ${m.content}`).join("\n\n");
+    if (appConfig.uiLocale === "en") {
+        return `Previous summary:\n${prev || "(empty)"}\n\nNew lines to fold in:\n${block}`;
+    }
+    return `已有摘要：\n${prev || "（无）"}\n\n新并入的对话：\n${block}`;
+}
+
+/** 将新消息折入滚动摘要（增量） */
+export async function mergeRollingSummary(
+    previousSummary: string,
+    newMessages: ChatMessage[]
+): Promise<string> {
+    if (newMessages.length === 0) return previousSummary.trim();
+    const summary = await chatWithModel([
+        { role: "system", content: mergeSystemPrompt() },
+        { role: "user", content: mergeUserPrompt(previousSummary, newMessages) },
+    ]);
+    return summary.trim();
+}
