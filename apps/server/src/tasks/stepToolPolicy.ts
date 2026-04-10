@@ -88,6 +88,21 @@ export class ToolPolicyGuard {
                 stepIndex: s.index as number,
             });
         }
+
+        const failStrat = s.onStepFail;
+        if (failStrat !== undefined && failStrat !== "fail_task" && failStrat !== "ask_user" && failStrat !== "goto_step") {
+            throw new ToolPolicyError("STEP_INVALID", "onStepFail 必须是 fail_task | ask_user | goto_step", {
+                stepIndex: s.index as number,
+            });
+        }
+        if (failStrat === "goto_step") {
+            const gi = s.onFailGotoStepIndex;
+            if (typeof gi !== "number" || !Number.isFinite(gi) || gi < 0) {
+                throw new ToolPolicyError("STEP_INVALID", "onStepFail=goto_step 时必须提供非负整数 onFailGotoStepIndex", {
+                    stepIndex: s.index as number,
+                });
+            }
+        }
     }
 
     /**

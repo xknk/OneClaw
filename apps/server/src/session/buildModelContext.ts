@@ -17,7 +17,6 @@ export type BuildModelContextResult = {
     rolling: RollingState;
 };
 
-const MERGE_CHUNK = 15;
 
 function sanitizeRolling(fullLen: number, rolling: RollingState): RollingState {
     if (rolling.archivedMessageCount > fullLen) {
@@ -35,10 +34,11 @@ function summaryBlockMsgs(rollingSummary: string): ChatMessage[] {
 /** 将一批消息折入滚动摘要；条数过多时先整段摘要再合并，避免单次 merge 提示过长 */
 async function foldDroppedIntoRolling(
     previous: string,
-    dropped: ChatMessage[]
+    dropped: ChatMessage[],
+    mergeChunk: number
 ): Promise<string> {
     if (dropped.length === 0) return previous;
-    if (dropped.length <= MERGE_CHUNK) {
+    if (dropped.length <= mergeChunk) {
         return mergeRollingSummary(previous, dropped);
     }
     const chunk = await summarizeMessages(dropped);
@@ -54,6 +54,7 @@ export async function buildMessagesForModel(
     fullMessages: ChatMessage[],
     rolling: RollingState
 ): Promise<BuildModelContextResult> {
+    const mergeChunk = Math.max(1, appConfig.chatRollingMergeChunk);
     const maxHist = appConfig.chatHistoryMaxTokens;
     const singleMax = appConfig.chatSingleMessageMaxTokens;
     const maxMsg = appConfig.chatContextMaxMessages;
@@ -68,7 +69,7 @@ export async function buildMessagesForModel(
     if (maxMsg > 0 && rawTail.length > maxMsg) {
         const dropped = rawTail.slice(0, rawTail.length - maxMsg);
         rawTail = rawTail.slice(-maxMsg);
-        rollingSummary = await foldDroppedIntoRolling(rollingSummary, dropped);
+        rollingSummary = await foldDroppedIntoRolling(rollingSummary, dropped, mergeChunk);
         archivedMessageCount += dropped.length;
     }
 
@@ -78,10 +79,11 @@ export async function buildMessagesForModel(
         if (estimateMessagesTokens(candidate) <= maxHist) break;
 
         if (rawTail.length > 1) {
-            const first = rawTail[0]!;
-            rawTail = rawTail.slice(1);
-            rollingSummary = await mergeRollingSummary(rollingSummary, [first]);
-            archivedMessageCount++;
+            const batchSize = Math.min(mergeChunk, rawTail.length - 1);
+            const batch = rawTail.slice(0, batchSize);
+            rawTail = rawTail.slice(batchSize);
+            rollingSummary = await mergeRollingSummary(rollingSummary, batch);
+            archivedMessageCount += batchSize;
             continue;
         }
 

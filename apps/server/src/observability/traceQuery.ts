@@ -5,25 +5,51 @@ import readline from "node:readline";
 import { appConfig } from "@/config/evn";
 import type { TraceEvent } from "./traceTypes";
 
+/** 与 traceWriter 一致：`trace-YYYY-MM-DD.jsonl` 或 `trace-YYYY-MM-DD-partN.jsonl` */
+const TRACE_FILE_RE = /^trace-(\d{4}-\d{2}-\d{2})(?:-part\d+)?\.jsonl$/;
+
 /** 获取日志目录 */
 export function traceLogDir(): string {
     return path.join(appConfig.userWorkspaceDir, "logs", "trace");
 }
 
+/** 同日多段文件：主文件在前，part2、part3… 递增 */
+function sortSameDayTraceFiles(prefix: string, a: string, b: string): number {
+    const order = (n: string): number => {
+        if (n === `${prefix}.jsonl`) return 0;
+        const m = n.match(/-part(\d+)\.jsonl$/);
+        return m ? Number(m[1]) : 999;
+    };
+    return order(a) - order(b);
+}
+
 /** 
- * 优化 1: 精简 listTraceFiles
- * 使用异步迭代器处理文件列表，减少数组拷贝
+ * 列出最近 N 个日历日内的全部 trace 文件路径（含同日轮转产生的 part 文件）
  */
 export async function listTraceFiles(lastNDays = 14): Promise<string[]> {
     const dir = traceLogDir();
     try {
         const names = await fsp.readdir(dir);
-        return names
-            .filter((n) => n.startsWith("trace-") && n.endsWith(".jsonl"))
-            // 直接利用日期字符串排序，性能更高
-            .sort((a, b) => b.localeCompare(a))
-            .slice(0, lastNDays)
-            .map((n) => path.join(dir, n));
+        const byDate = new Map<string, string[]>();
+        for (const n of names) {
+            const m = n.match(TRACE_FILE_RE);
+            if (!m) continue;
+            const date = m[1];
+            const arr = byDate.get(date) ?? [];
+            arr.push(n);
+            byDate.set(date, arr);
+        }
+        const sortedDates = Array.from(byDate.keys()).sort((a, b) => b.localeCompare(a));
+        const selectedDates = sortedDates.slice(0, lastNDays);
+        const out: string[] = [];
+        for (const d of selectedDates) {
+            const prefix = `trace-${d}`;
+            const files = (byDate.get(d) ?? []).sort((a, b) => sortSameDayTraceFiles(prefix, a, b));
+            for (const n of files) {
+                out.push(path.join(dir, n));
+            }
+        }
+        return out;
     } catch {
         return [];
     }

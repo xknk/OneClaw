@@ -3,6 +3,7 @@ import type { TaskCheckpoint, TaskRecord } from "./types";
 import { getTaskPlanFromRecord } from "./collaborationService";
 import type { PlanStep, TaskPlan } from "./collaborationTypes";
 import { ToolPolicyGuard } from "./stepToolPolicy";
+import { applyTransition } from "./stateMachine";
 
 /**
  * 运行任务计划的配置选项
@@ -132,6 +133,26 @@ function buildCheckpoint(stepIndex: number, traceId: string, idempotencyKey: str
  * 任务失败终态处理
  * 记录失败原因、保存 Checkpoint、转换任务状态
  */
+/** 步骤失败但希望用户补充信息：任务进入 pending_approval，保留计划与 checkpoint */
+async function pauseForUserAfterStepFail(
+    task: TaskRecord,
+    plan: TaskPlan,
+    failureReason: string,
+    checkpoint: Omit<TaskCheckpoint, "at">,
+    traceId: string,
+    stepIndex: number
+): Promise<TaskRecord> {
+    const cur = await persistPlan(task, plan);
+    const next = applyTransition(cur, "pending_approval", {
+        reason: "step_failed_await_user",
+        timelineNote: `步骤 ${stepIndex} 执行失败，请先补充信息或调整后从本步重试：${failureReason.slice(0, 400)}`,
+        checkpoint: { ...checkpoint, at: nowIso() },
+        meta: { traceId, stepIndex, stepFailedAwaitUser: true },
+    });
+    await writeTask(next);
+    return next;
+}
+
 async function markFailed(
     task: TaskRecord,
     failureReason: string,
@@ -225,6 +246,16 @@ export async function runTaskPlan(taskId: string, options: RunTaskPlanOptions = 
     for (const s of plan.steps) {
         ToolPolicyGuard.validateStepContract(s);
     }
+    for (const s of plan.steps) {
+        if (s.onStepFail === "goto_step") {
+            const t = s.onFailGotoStepIndex;
+            if (typeof t !== "number" || !Number.isFinite(t) || t < 0 || t >= plan.steps.length) {
+                throw new Error(
+                    `步骤 ${s.index}：onFailGotoStepIndex 无效（需 0..${plan.steps.length - 1} 的整数）`
+                );
+            }
+        }
+    }
 
     // 3. 准备运行环境
     let cur = await ensureRunning(rec);
@@ -274,14 +305,35 @@ export async function runTaskPlan(taskId: string, options: RunTaskPlanOptions = 
             cur = await appendNote(cur, "step_done", { traceId, stepIndex: step.index });
             idx++;
         } catch (e) {
-            // [异常捕获]: 执行失败时，回退步骤状态并创建 Checkpoint
-            step.status = "pending";
-            cur = await persistPlan(cur, plan);
-
             const reason = e instanceof Error ? e.message : String(e);
             const cp = buildCheckpoint(step.index, traceId, idempotencyKey);
+            const strategy = step.onStepFail ?? "fail_task";
 
-            // 标记任务为失败，并将 Checkpoint 存入任务主体供后续恢复
+            if (strategy === "ask_user") {
+                step.status = "pending";
+                return pauseForUserAfterStepFail(cur, plan, reason, cp, traceId, step.index);
+            }
+
+            if (strategy === "goto_step" && typeof step.onFailGotoStepIndex === "number") {
+                const target = step.onFailGotoStepIndex;
+                if (target >= 0 && target < plan.steps.length) {
+                    step.status = "pending";
+                    const targetStep = plan.steps[target];
+                    if (targetStep) targetStep.status = "pending";
+                    cur = await persistPlan(cur, plan);
+                    cur = await appendNote(cur, "step_fail_goto", {
+                        traceId,
+                        fromStep: step.index,
+                        toStep: target,
+                        reason: reason.slice(0, 500),
+                    });
+                    idx = target;
+                    continue;
+                }
+            }
+
+            step.status = "pending";
+            cur = await persistPlan(cur, plan);
             return markFailed(cur, reason, cp, {
                 traceId,
                 stepIndex: step.index,

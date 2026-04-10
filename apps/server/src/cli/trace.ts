@@ -64,8 +64,9 @@ export function registerTraceCommands(program: Command): void {
         .description("列出最近一段时间内的失败类事件")
         .option("-S, --since <dur>", "时间窗口，如 24h / 1d / 30m", "24h")
         .option("-t, --tool <name>", "仅保留指定 toolName")
-        .option("-d, --days <n>", "最多扫描最近 N 个日志文件", "14")
-        .action(async (opts: { since: string; tool?: string; days: string }) => {
+        .option("-e, --code <errorCode>", "仅保留指定 errorCode（与策略/工具层一致）")
+        .option("-d, --days <n>", "最多扫描最近 N 个日历日的日志文件", "14")
+        .action(async (opts: { since: string; tool?: string; code?: string; days: string }) => {
             const ms = parseSinceToMs(opts.since);
             const sinceIso = new Date(Date.now() - ms).toISOString();
             const days = Math.max(1, Math.min(90, Number(opts.days) || 14));
@@ -85,6 +86,11 @@ export function registerTraceCommands(program: Command): void {
             if (opts.tool?.trim()) {
                 const t = opts.tool.trim();
                 rows = rows.filter((e) => e.toolName === t);
+            }
+
+            if (opts.code?.trim()) {
+                const c = opts.code.trim();
+                rows = rows.filter((e) => e.errorCode === c);
             }
 
             console.log(JSON.stringify(rows, null, 2));

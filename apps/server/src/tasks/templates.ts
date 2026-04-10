@@ -32,7 +32,14 @@ const STEPS_CODE_REVIEW: Omit<PlanStep, "status">[] = [
 ];
 const STEPS_DAILY_REPORT: Omit<PlanStep, "status">[] = [
     { index: 0, title: "收集材料", intent: "拉取当日工具调用与会话摘要", risk: "low", allowedTools: ["read_file", "search_files", "generate_daily_report"] },
-    { index: 1, title: "生成日报", intent: "调用日报生成并校对", risk: "medium", allowedTools: ["generate_daily_report", "read_file"] },
+    {
+        index: 1,
+        title: "生成日报",
+        intent: "调用日报生成并校对",
+        risk: "medium",
+        allowedTools: ["generate_daily_report", "read_file"],
+        onStepFail: "ask_user",
+    },
 ];
 const STEPS_RELEASE_PRECHECK: Omit<PlanStep, "status">[] = [
     { index: 0, title: "构建与静态检查", intent: "运行 lint/build 等门禁", risk: "medium", allowedTools: ["read_file", "exec"] },

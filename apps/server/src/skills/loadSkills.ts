@@ -5,6 +5,7 @@ import path from "path";
 import { appConfig } from "@/config/evn";
 import type { LoadedSkills, Skill, SkillEnableWhen } from "./types";
 import type { ToolSchema } from "@/llm/providers/ModelProvider";
+import { skillFromMarkdown } from "./skillMarkdown";
 
 /** 
  * 获取技能配置存放的绝对路径 
@@ -129,17 +130,32 @@ export async function loadRawSkillsFromDisk(): Promise<Skill[]> {
     const skills: Skill[] = [];
 
     for (const name of entries) {
-        // 只处理 .json 文件
-        if (!name.toLowerCase().endsWith(".json")) continue;
+        const lower = name.toLowerCase();
+        if (!lower.endsWith(".json") && !lower.endsWith(".md")) continue;
 
         const fullPath = path.join(dir, name);
         try {
-            const text = await fs.readFile(fullPath, "utf-8"); // 读取技能配置文件内容
-            const json = JSON.parse(text) as unknown; // 解析技能配置文件内容
-            const parsed = parseSkillJson(json); // 解析技能配置文件内容
-            skills.push(...parsed); // 将解析后的 Skill 对象添加到 skills 数组中
+            const text = await fs.readFile(fullPath, "utf-8");
+            if (lower.endsWith(".md")) {
+                const one = skillFromMarkdown(text, fullPath);
+                skills.push(one);
+                continue;
+            }
+            let json: unknown;
+            try {
+                json = JSON.parse(text) as unknown;
+            } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                throw new Error(`JSON 语法错误: ${msg}`);
+            }
+            const parsed = parseSkillJson(json);
+            if (parsed.length === 0) {
+                console.warn(`[skills] ${fullPath} 未解析出任何 skill（需为 { skills: [...] } 或含 id 的单对象）`);
+            }
+            skills.push(...parsed);
         } catch (err) {
-            console.error(`[skills] 载入失败: ${fullPath}`, err); // 如果解析失败，打印错误信息
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[skills] 载入失败: ${fullPath}\n  ${msg}`);
         }
     }
 

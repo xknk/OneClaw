@@ -1,6 +1,7 @@
 import { getAgentConfig } from "@/agent/agentRegistry";
 import { checkPathPolicy } from "@/security/pathPolicy";
 import type { ToolGuardResult } from "@/security/toolGuard";
+import { mergeProfileOverride, readPolicyOverridesFile } from "@/security/policyOverrides";
 
 /**
  * 权限配置文件 ID 类型
@@ -51,11 +52,20 @@ const SENSITIVE_PATH_DENY: RegExp[] = [
  * 默认禁止执行的命令片段
  */
 const DEFAULT_EXEC_FORBIDDEN: string[] = ["&&", "||", ";", "`", "$(", "${", "\n"];
+function cloneProfile(p: PermissionProfile): PermissionProfile {
+    return {
+        ...p,
+        execAllowlistPatterns: p.execAllowlistPatterns ? [...p.execAllowlistPatterns] : undefined,
+        pathAllowlistPrefixes: p.pathAllowlistPrefixes ? [...p.pathAllowlistPrefixes] : undefined,
+        pathDenylistPatterns: p.pathDenylistPatterns ? [...p.pathDenylistPatterns] : undefined,
+        execForbiddenSubstrings: p.execForbiddenSubstrings ? [...p.execForbiddenSubstrings] : undefined,
+    };
+}
+
 /**
- * 权限配置文件映射
+ * 内置权限表（可被 dataDir/policy-overrides.json 合并覆盖）
  */
-//
-const PROFILES: Record<PermissionProfileId, PermissionProfile> = {
+const PROFILES_BASE: Record<PermissionProfileId, PermissionProfile> = {
     webchat_default: {
         allowReadWorkspace: true,
         allowWriteWorkspace: true,
@@ -90,6 +100,25 @@ const PROFILES: Record<PermissionProfileId, PermissionProfile> = {
         pathDenylistPatterns: SENSITIVE_PATH_DENY,
     },
 };
+
+function buildProfiles(): Record<PermissionProfileId, PermissionProfile> {
+    const out: Record<PermissionProfileId, PermissionProfile> = {
+        webchat_default: cloneProfile(PROFILES_BASE.webchat_default),
+        qq_group: cloneProfile(PROFILES_BASE.qq_group),
+        readonly: cloneProfile(PROFILES_BASE.readonly),
+        daily_report: cloneProfile(PROFILES_BASE.daily_report),
+    };
+    const file = readPolicyOverridesFile();
+    if (!file?.profiles) return out;
+    const ids: PermissionProfileId[] = ["webchat_default", "qq_group", "readonly", "daily_report"];
+    for (const id of ids) {
+        const o = file.profiles[id];
+        if (o) out[id] = mergeProfileOverride(out[id], o);
+    }
+    return out;
+}
+
+const PROFILES: Record<PermissionProfileId, PermissionProfile> = buildProfiles();
 
 /**
  * 根据渠道ID和代理ID解析权限配置文件ID

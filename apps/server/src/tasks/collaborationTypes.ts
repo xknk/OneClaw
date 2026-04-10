@@ -63,6 +63,9 @@ export type PlanStepStatus =
 
     | "skipped"; // 被跳过（通常由 Reviewer 或用户手动干预）
 
+/** 单步执行失败时的策略（默认 fail_task） */
+export type OnStepFailStrategy = "fail_task" | "ask_user" | "goto_step";
+
 /**
  * 计划中的单条任务步骤
  */
@@ -77,6 +80,10 @@ export interface PlanStep {
     assignedAgentId?: string;
     /** 本步在协作中的角色，与 trace.orchestrationRole 对齐 */
     role?: string;
+    /** 本步执行抛错时的策略：失败整任务 / 转待用户 / 跳转到另一步重试 */
+    onStepFail?: OnStepFailStrategy;
+    /** 与 onStepFail=goto_step 配合：失败时从该步骤索引继续 */
+    onFailGotoStepIndex?: number;
 }
 
 /**

@@ -4,7 +4,16 @@ import { UnifiedInboundMessage, UnifiedOutboundMessage } from "@/channels/unifie
 import { appConfig } from "@/config/evn";
 import { ChatMessage } from "@/llm/model";
 import { buildMessagesForModel } from "@/session/buildModelContext";
-import { getOrCreateSessionId, getRollingState, setRollingState, touchSession } from "@/session/store";
+import {
+    getOrCreateSessionId,
+    getRollingState,
+    setRollingState,
+    touchSession,
+} from "@/session/store";
+import {
+    awaitRollingPrefetchIdle,
+    scheduleRollingPrefetchAfterAssistant,
+} from "@/session/rollingPrefetch";
 import { appendMessage, readMessages } from "@/session/transcript";
 import { SessionKey } from "@/session/type";
 import { loadSkillsForContext } from "@/skills/loadSkills";
@@ -205,6 +214,7 @@ export async function handleUnifiedChat(
     });
 
     // --- 3. 记忆与上下文管理 ---
+    await awaitRollingPrefetchIdle(sessionKey, agentId);
     const sessionId = await getOrCreateSessionId(sessionKey, agentId);
     const history = await readMessages(sessionId, agentId); // 从存储层读取历史
     await appendMessage(sessionId, "user", userText, agentId); // 存入本次用户输入
@@ -364,6 +374,7 @@ export async function handleUnifiedChat(
         // --- 7. 响应与任务反馈 ---
         await appendMessage(sessionId, "assistant", replyText, agentId); // 保存 AI 回复
         await touchSession(sessionKey, agentId); // 更新活跃时间
+        scheduleRollingPrefetchAfterAssistant(sessionKey, agentId, sessionId);
 
         // 将结果发回前端
         await sendOutbound({

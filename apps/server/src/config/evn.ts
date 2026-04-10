@@ -131,6 +131,18 @@ export const appConfig = {
     m2StepToolEnforcement: bool("ONECLAW_M2_STEP_TOOL_ENFORCEMENT", true),
     /** 界面语言（TUI、Web 服务端默认值、摘要提示语等） */
     uiLocale: uiLocale("ONECLAW_UI_LOCALE", "zh"),
+    /** 单个 trace JSONL 超过此字节数则轮转为同日 `trace-YYYY-MM-DD-partN.jsonl` */
+    traceFileMaxBytes: num("ONECLAW_TRACE_FILE_MAX_BYTES", 64 * 1024 * 1024),
+    /** 保留最近 N 个日历日的 trace 文件，更早的会被异步清理 */
+    traceRetentionDays: num("ONECLAW_TRACE_RETENTION_DAYS", 30),
+    /**
+     * 滚动摘要：单次 token 超限时，一次合并进摘要的最多消息条数（减少串行 LLM 调用次数）。
+     */
+    chatRollingMergeChunk: num("ONECLAW_CHAT_ROLLING_MERGE_CHUNK", 15),
+    /**
+     * 助手回复写入后是否在后台预跑滚动摘要（与 buildMessagesForModel 对齐），以降低下一轮首包前同步摘要耗时。
+     */
+    chatRollingPrefetchEnabled: bool("ONECLAW_ROLLING_PREFETCH_ENABLED", true),
 
 } as const;
 
