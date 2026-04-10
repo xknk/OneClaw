@@ -14,6 +14,50 @@ import {
     downloadTaskExport,
 } from "@/api/client";
 import type { TaskRecord, TaskStatus } from "@/api/types";
+
+function collectTraceIdsFromTask(task: TaskRecord): string[] {
+    const seen = new Set<string>();
+    const add = (v: unknown) => {
+        if (typeof v === "string" && v.trim()) seen.add(v.trim());
+    };
+    const walk = (m: Record<string, unknown> | undefined) => {
+        if (!m) return;
+        add(m.traceId);
+    };
+    const meta = task.meta;
+    if (meta && typeof meta === "object") {
+        const m = meta as Record<string, unknown>;
+        walk(m);
+        const fail = m.v4_last_failure_context;
+        if (fail && typeof fail === "object" && fail !== null) {
+            add((fail as Record<string, unknown>).traceId);
+        }
+    }
+    for (const tr of task.transitions) {
+        walk(tr.meta as Record<string, unknown> | undefined);
+    }
+    for (const e of task.timeline) {
+        walk(e.meta as Record<string, unknown> | undefined);
+    }
+    return Array.from(seen);
+}
+
+function planStepOptionsFromTask(task: TaskRecord): { index: number; label: string }[] {
+    const raw = task.meta?.v4_plan;
+    if (!raw || typeof raw !== "object" || raw === null) return [];
+    const steps = (raw as { steps?: unknown }).steps;
+    if (!Array.isArray(steps)) return [];
+    const out: { index: number; label: string }[] = [];
+    for (let i = 0; i < steps.length; i++) {
+        const s = steps[i];
+        if (!s || typeof s !== "object") continue;
+        const idx =
+            typeof (s as { index?: unknown }).index === "number" ? (s as { index: number }).index : i;
+        const title = typeof (s as { title?: unknown }).title === "string" ? (s as { title: string }).title : "";
+        out.push({ index: idx, label: title ? `${idx} · ${title}` : String(idx) });
+    }
+    return out;
+}
 import { formatDateTime } from "@/lib/formatDateTime";
 import { useLocale } from "@/locale/LocaleContext";
 import { Button, Card, Input, Select, TextArea, StatusBadge } from "@/components/ui";
@@ -58,7 +102,8 @@ export function TaskDetailPage() {
     const [resumeStep, setResumeStep] = useState("0");
     const [resumeLabel, setResumeLabel] = useState("");
     const [resumePayload, setResumePayload] = useState("{}");
-    const [runTrace, setRunTrace] = useState("");
+    const [runTraceChoice, setRunTraceChoice] = useState<"" | "__custom__" | string>("");
+    const [runTraceCustom, setRunTraceCustom] = useState("");
 
     const load = useCallback(async () => {
         if (!taskId) return;
@@ -82,6 +127,7 @@ export function TaskDetailPage() {
     /** 切换任务时清空 Planner 文本框，避免沿用上一任务的计划内容 */
     useEffect(() => {
         setPlanJson(defaultPlanJson);
+        setResumeStep("0");
     }, [taskId, defaultPlanJson]);
 
     /** 从服务端任务单据同步 Planner 文本框（仅当有已保存计划时覆盖；须与路由 taskId 一致以防切换任务时串数据） */
@@ -97,6 +143,23 @@ export function TaskDetailPage() {
             }
         }
     }, [task, taskId]);
+
+    const traceIdsOnTask = useMemo(() => (task ? collectTraceIdsFromTask(task) : []), [task]);
+    const planStepOpts = useMemo(() => (task ? planStepOptionsFromTask(task) : []), [task]);
+
+    /** 有计划步骤时，保证 step 下拉与当前索引一致 */
+    useEffect(() => {
+        if (planStepOpts.length === 0) return;
+        if (!planStepOpts.some((o) => String(o.index) === resumeStep)) {
+            setResumeStep(String(planStepOpts[0].index));
+        }
+    }, [planStepOpts, resumeStep]);
+
+    /** 切换任务时重置 run trace 选择 */
+    useEffect(() => {
+        setRunTraceChoice("");
+        setRunTraceCustom("");
+    }, [taskId]);
 
     const flash = (m: string) => {
         setMsg(m);
@@ -277,7 +340,13 @@ export function TaskDetailPage() {
                         variant="secondary"
                         onClick={() =>
                             void run(async () => {
-                                const r = await apiTaskRun(task.taskId, runTrace.trim() || undefined);
+                                const tid =
+                                    runTraceChoice === ""
+                                        ? undefined
+                                        : runTraceChoice === "__custom__"
+                                          ? runTraceCustom.trim() || undefined
+                                          : runTraceChoice;
+                                const r = await apiTaskRun(task.taskId, tid);
                                 setTask(r);
                             })
                         }
@@ -285,29 +354,85 @@ export function TaskDetailPage() {
                         {t("task.run")}
                     </Button>
                 </div>
-                <label className="mt-3 block text-xs text-slate-400">
+                <p className="mt-3 text-xs leading-relaxed text-slate-500">{t("task.runTraceHint")}</p>
+                <label className="mt-2 block text-xs text-slate-400">
                     {t("task.runTrace")}
-                    <Input
-                        className="mt-1"
-                        value={runTrace}
-                        onChange={(e) => setRunTrace(e.target.value)}
-                    />
+                    <Select
+                        className="mt-1 font-mono text-xs"
+                        value={
+                            runTraceChoice === "__custom__" ||
+                            (runTraceChoice !== "" && !traceIdsOnTask.includes(runTraceChoice))
+                                ? "__custom__"
+                                : runTraceChoice
+                        }
+                        onChange={(e) => {
+                            const v = e.target.value;
+                            setRunTraceChoice(v);
+                            if (v !== "__custom__") {
+                                setRunTraceCustom("");
+                            }
+                        }}
+                    >
+                        <option value="">{t("task.runTraceAuto")}</option>
+                        {traceIdsOnTask.map((id) => (
+                            <option key={id} value={id}>
+                                {id.length > 48 ? `${id.slice(0, 24)}…${id.slice(-12)}` : id}
+                            </option>
+                        ))}
+                        <option value="__custom__">{t("task.runTraceCustom")}</option>
+                    </Select>
                 </label>
+                {(runTraceChoice === "__custom__" ||
+                    (runTraceChoice !== "" && !traceIdsOnTask.includes(runTraceChoice))) && (
+                    <label className="mt-2 block text-xs text-slate-400">
+                        {t("task.runTraceCustom")}
+                        <Input
+                            className="mt-1 font-mono text-xs"
+                            value={
+                                runTraceChoice !== "" && !traceIdsOnTask.includes(runTraceChoice)
+                                    ? runTraceChoice
+                                    : runTraceCustom
+                            }
+                            onChange={(e) => {
+                                setRunTraceCustom(e.target.value);
+                                setRunTraceChoice("__custom__");
+                            }}
+                            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                        />
+                    </label>
+                )}
             </Card>
 
             <Card className="p-4">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.resume")}</h3>
                 <p className="text-xs text-slate-500">{t("task.resumeHint")}</p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label className="block text-xs text-slate-400">
-                        stepIndex
-                        <Input
-                            className="mt-1"
-                            type="number"
-                            value={resumeStep}
-                            onChange={(e) => setResumeStep(e.target.value)}
-                        />
-                    </label>
+                    {planStepOpts.length > 0 ? (
+                        <label className="block text-xs text-slate-400">
+                            {t("task.resumeStepPick")}
+                            <Select
+                                className="mt-1"
+                                value={resumeStep}
+                                onChange={(e) => setResumeStep(e.target.value)}
+                            >
+                                {planStepOpts.map((o) => (
+                                    <option key={o.index} value={String(o.index)}>
+                                        {o.label}
+                                    </option>
+                                ))}
+                            </Select>
+                        </label>
+                    ) : (
+                        <label className="block text-xs text-slate-400">
+                            {t("task.resumeStep")}
+                            <Input
+                                className="mt-1"
+                                type="number"
+                                value={resumeStep}
+                                onChange={(e) => setResumeStep(e.target.value)}
+                            />
+                        </label>
+                    )}
                     <label className="block text-xs text-slate-400">
                         {t("task.labelOpt")}
                         <Input

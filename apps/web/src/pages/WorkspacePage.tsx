@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     apiWorkspacePaths,
     apiWorkspaceFileAccessGet,
@@ -17,7 +17,7 @@ import {
     apiWorkspaceSessionDelete,
 } from "@/api/client";
 import { useLocale } from "@/locale/LocaleContext";
-import { Button, Card, Input, TextArea } from "@/components/ui";
+import { Button, Card, Input, Select, TextArea } from "@/components/ui";
 import { formatDateTime } from "@/lib/formatDateTime";
 
 export function WorkspacePage() {
@@ -42,6 +42,26 @@ export function WorkspacePage() {
         [],
     );
     const [sessionAgentId, setSessionAgentId] = useState("main");
+
+    const agentIdsFromRegistry = useMemo(() => {
+        try {
+            const o = JSON.parse(agentsJson) as { agents?: { id?: string }[] };
+            if (!Array.isArray(o?.agents)) return ["main"];
+            const ids = o.agents
+                .map((a) => (typeof a?.id === "string" ? a.id.trim() : ""))
+                .filter(Boolean);
+            const merged = ["main", ...ids.filter((id) => id !== "main")];
+            return Array.from(new Set(merged));
+        } catch {
+            return ["main"];
+        }
+    }, [agentsJson]);
+
+    const sessionAgentSelectValue = agentIdsFromRegistry.includes(sessionAgentId.trim())
+        ? sessionAgentId.trim()
+        : "__custom__";
+
+    const skillFileSelectValue = skillFiles.includes(skillName) ? skillName : "__custom__";
 
     const loadAll = useCallback(async () => {
         setError(null);
@@ -308,27 +328,44 @@ export function WorkspacePage() {
             <Card className="p-4">
                 <h3 className="text-sm font-medium text-slate-800 dark:text-slate-200">{t("workspace.skillsTitle")}</h3>
                 <p className="mt-1 text-xs text-slate-600 dark:text-slate-500">{t("workspace.skillsHint")}</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                    {skillFiles.map((f) => (
-                        <Button
-                            key={f}
-                            type="button"
-                            variant="secondary"
-                            className="text-xs"
-                            onClick={() => void loadSkillFile(f)}
-                        >
-                            {f}
-                        </Button>
-                    ))}
-                </div>
-                <label className="mt-3 block text-xs text-slate-600 dark:text-slate-400">
-                    {t("workspace.skillFileName")}
-                    <Input
+                <label className="mt-2 block text-xs text-slate-600 dark:text-slate-400">
+                    {t("workspace.skillPick")}
+                    <Select
                         className="mt-1 font-mono text-xs"
-                        value={skillName}
-                        onChange={(e) => setSkillName(e.target.value)}
-                    />
+                        value={skillFileSelectValue}
+                        onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === "") {
+                                return;
+                            }
+                            if (v === "__custom__") {
+                                if (skillFiles.includes(skillName)) {
+                                    setSkillName("");
+                                }
+                            } else {
+                                void loadSkillFile(v);
+                            }
+                        }}
+                    >
+                        <option value="">{t("workspace.skillPickPlaceholder")}</option>
+                        {skillFiles.map((f) => (
+                            <option key={f} value={f}>
+                                {f}
+                            </option>
+                        ))}
+                        <option value="__custom__">{t("workspace.skillCustom")}</option>
+                    </Select>
                 </label>
+                {(skillFileSelectValue === "__custom__" || !skillFiles.includes(skillName)) && (
+                    <label className="mt-3 block text-xs text-slate-600 dark:text-slate-400">
+                        {t("workspace.skillFileName")}
+                        <Input
+                            className="mt-1 font-mono text-xs"
+                            value={skillName}
+                            onChange={(e) => setSkillName(e.target.value)}
+                        />
+                    </label>
+                )}
                 <TextArea
                     className="mt-2 min-h-[180px] font-mono text-xs"
                     value={skillBody}
@@ -361,13 +398,39 @@ export function WorkspacePage() {
                 <h3 className="text-sm font-medium text-slate-800 dark:text-slate-200">{t("workspace.sessionsTitle")}</h3>
                 <p className="mt-1 text-xs text-slate-600 dark:text-slate-500">{t("workspace.sessionsHint")}</p>
                 <label className="mt-2 block text-xs text-slate-600 dark:text-slate-400">
-                    agentId
-                    <Input
+                    {t("workspace.sessionAgentPick")}
+                    <Select
                         className="mt-1 font-mono text-xs"
-                        value={sessionAgentId}
-                        onChange={(e) => setSessionAgentId(e.target.value)}
-                    />
+                        value={sessionAgentSelectValue}
+                        onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === "__custom__") {
+                                if (agentIdsFromRegistry.includes(sessionAgentId.trim())) {
+                                    setSessionAgentId("");
+                                }
+                            } else {
+                                setSessionAgentId(v);
+                            }
+                        }}
+                    >
+                        {agentIdsFromRegistry.map((id) => (
+                            <option key={id} value={id}>
+                                {id}
+                            </option>
+                        ))}
+                        <option value="__custom__">{t("workspace.sessionAgentCustom")}</option>
+                    </Select>
                 </label>
+                {sessionAgentSelectValue === "__custom__" && (
+                    <label className="mt-2 block text-xs text-slate-600 dark:text-slate-400">
+                        agentId
+                        <Input
+                            className="mt-1 font-mono text-xs"
+                            value={sessionAgentId}
+                            onChange={(e) => setSessionAgentId(e.target.value)}
+                        />
+                    </label>
+                )}
                 <Button type="button" variant="secondary" className="mt-2" onClick={() => void loadAll()}>
                     {t("workspace.reloadSessions")}
                 </Button>

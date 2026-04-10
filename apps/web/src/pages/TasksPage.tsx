@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { useLocale } from "@/locale/LocaleContext";
-import { apiCreateTask, apiDeleteTask, apiListTasks } from "@/api/client";
-import type { TaskRecord, TaskStatus } from "@/api/types";
+import { apiCreateTask, apiDeleteTask, apiListTasks, apiTaskTemplates } from "@/api/client";
+import type { TaskRecord, TaskStatus, TaskTemplateSummary } from "@/api/types";
 import { formatDateTime } from "@/lib/formatDateTime";
 import { Button, Card, Input, Select, StatusBadge } from "@/components/ui";
+
+const LIMIT_PRESETS = [25, 50, 100, 200, 500] as const;
 
 const STATUSES: (TaskStatus | "")[] = [
     "",
@@ -31,7 +33,28 @@ export function TasksPage() {
     const [failedOnly, setFailedOnly] = useState(false);
     const [limit, setLimit] = useState(50);
     const [title, setTitle] = useState("");
+    const [templateId, setTemplateId] = useState("");
+    const [templates, setTemplates] = useState<TaskTemplateSummary[]>([]);
     const [creating, setCreating] = useState(false);
+
+    useEffect(() => {
+        if (!hasToken) {
+            setTemplates([]);
+            return;
+        }
+        let cancelled = false;
+        void (async () => {
+            try {
+                const { templates: rows } = await apiTaskTemplates();
+                if (!cancelled) setTemplates(rows);
+            } catch {
+                if (!cancelled) setTemplates([]);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [hasToken]);
 
     const load = useCallback(async () => {
         setError(null);
@@ -61,8 +84,12 @@ export function TasksPage() {
         setCreating(true);
         setError(null);
         try {
-            await apiCreateTask({ title: title.trim() || undefined });
+            await apiCreateTask({
+                title: title.trim() || undefined,
+                templateId: templateId.trim() || undefined,
+            });
             setTitle("");
+            setTemplateId("");
             await load();
         } catch (e) {
             setError(e instanceof Error ? e.message : t("tasks.createFail"));
@@ -126,15 +153,18 @@ export function TasksPage() {
                         {t("tasks.failedOnly")}
                     </label>
                     <label className="block text-xs text-slate-600 dark:text-slate-400">
-                        limit
-                        <Input
+                        {t("tasks.limitLabel")}
+                        <Select
                             className="mt-1"
-                            type="number"
-                            min={1}
-                            max={500}
-                            value={limit}
+                            value={String(limit)}
                             onChange={(e) => setLimit(Number(e.target.value) || 50)}
-                        />
+                        >
+                            {LIMIT_PRESETS.map((n) => (
+                                <option key={n} value={String(n)}>
+                                    {n}
+                                </option>
+                            ))}
+                        </Select>
                     </label>
                 </div>
                 <Button type="button" variant="secondary" className="mt-3" onClick={() => void load()}>
@@ -145,17 +175,50 @@ export function TasksPage() {
             <Card className="p-4">
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("tasks.newTitle")}</h2>
                 <p className="mt-1 text-xs text-slate-600 dark:text-slate-500">{t("tasks.newHint")}</p>
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                    <Input
-                        placeholder={t("tasks.titlePh")}
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                        disabled={!hasToken}
-                    />
-                    <Button type="button" onClick={() => void create()} disabled={creating || !hasToken}>
-                        {t("tasks.create")}
-                    </Button>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-500">{t("tasks.templateHint")}</p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="block text-xs text-slate-600 dark:text-slate-400">
+                        {t("tasks.template")}
+                        <Select
+                            className="mt-1"
+                            value={templateId}
+                            onChange={(e) => {
+                                const id = e.target.value;
+                                setTemplateId(id);
+                                const tpl = templates.find((x) => x.id === id);
+                                if (tpl && !title.trim()) {
+                                    setTitle(tpl.defaultTitle);
+                                }
+                            }}
+                            disabled={!hasToken}
+                        >
+                            <option value="">{t("tasks.templateNone")}</option>
+                            {templates.map((tpl) => (
+                                <option key={tpl.id} value={tpl.id}>
+                                    {tpl.id} — {tpl.defaultTitle}
+                                </option>
+                            ))}
+                        </Select>
+                    </label>
+                    <label className="block text-xs text-slate-600 dark:text-slate-400 sm:col-span-2">
+                        {t("tasks.titlePh")}
+                        <Input
+                            className="mt-1"
+                            placeholder={t("tasks.titlePh")}
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            disabled={!hasToken}
+                        />
+                    </label>
                 </div>
+                <Button
+                    type="button"
+                    className="mt-3"
+                    onClick={() => void create()}
+                    disabled={creating || !hasToken}
+                >
+                    {t("tasks.create")}
+                </Button>
             </Card>
 
             {error && <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}

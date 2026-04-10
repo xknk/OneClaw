@@ -3,9 +3,15 @@ import { Link } from "react-router-dom";
 import type { ChatMessage, Conversation } from "@/chat/types";
 import { useAuth } from "@/auth/AuthContext";
 import { useLocale } from "@/locale/LocaleContext";
-import { apiChat, apiSessionReset, apiWorkspaceSessionDelete } from "@/api/client";
+import {
+    apiChat,
+    apiListTasks,
+    apiSessionReset,
+    apiWorkspaceAgentsGet,
+    apiWorkspaceSessionDelete,
+} from "@/api/client";
 import { ChatSidebar } from "@/components/ChatSidebar";
-import { Button, Card, Input, TextArea } from "@/components/ui";
+import { Button, Card, Input, Select, TextArea } from "@/components/ui";
 import { createEmptyConversation, loadConversations, saveConversations } from "@/lib/conversationStore";
 import { ensureRegistered, getProfile } from "@/lib/localUser";
 
@@ -26,10 +32,55 @@ export function ChatPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+    const [agentOptions, setAgentOptions] = useState<{ id: string; label: string }[]>([]);
+    const [recentTasks, setRecentTasks] = useState<{ taskId: string; title: string }[]>([]);
     const bottomRef = useRef<HTMLDivElement>(null);
     const prevActiveId = useRef<string | null>(null);
 
     const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined;
+
+    useEffect(() => {
+        if (!hasToken) {
+            setAgentOptions(fallbackAgentOptions());
+            setRecentTasks([]);
+            return;
+        }
+        let cancelled = false;
+        void (async () => {
+            try {
+                const ag = await apiWorkspaceAgentsGet();
+                const reg = ag.registry as { agents?: { id: string; displayName?: string }[] } | undefined;
+                const list = Array.isArray(reg?.agents)
+                    ? reg.agents.map((a) => ({
+                          id: a.id,
+                          label: a.displayName?.trim() ? `${a.id} — ${a.displayName}` : a.id,
+                      }))
+                    : [];
+                if (!cancelled) setAgentOptions(list.length > 0 ? list : fallbackAgentOptions());
+            } catch {
+                if (!cancelled) setAgentOptions(fallbackAgentOptions());
+            }
+            try {
+                const { tasks } = await apiListTasks({ limit: 40 });
+                if (!cancelled) {
+                    setRecentTasks(tasks.map((x) => ({ taskId: x.taskId, title: x.title })));
+                }
+            } catch {
+                if (!cancelled) setRecentTasks([]);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [hasToken]);
+
+    function fallbackAgentOptions(): { id: string; label: string }[] {
+        return [
+            { id: "main", label: "main" },
+            { id: "daily_report", label: "daily_report" },
+            { id: "code_review", label: "code_review" },
+        ];
+    }
 
     /** 登录：加载本地会话；访客：清空 */
     useEffect(() => {
@@ -300,6 +351,33 @@ export function ChatPage() {
 
     const sessionKeyDisplay = hasToken && activeConv ? activeConv.sessionKey : guestSessionKey;
 
+    const agentIdTrim = agentId.trim();
+    const agentInList = agentOptions.some((a) => a.id === agentIdTrim);
+    const agentSelectValue = agentInList ? agentIdTrim : "__custom__";
+
+    const taskIdTrim = taskId.trim();
+    const taskInRecent = recentTasks.some((x) => x.taskId === taskIdTrim);
+    const taskSelectValue = !taskIdTrim ? "none" : taskInRecent ? taskIdTrim : "__custom__";
+
+    const patchAgent = (v: string) => {
+        setAgentId(v);
+        if (hasToken && activeId) {
+            patchActive({ agentId: v });
+        }
+    };
+    const patchIntent = (v: string) => {
+        setIntent(v);
+        if (hasToken && activeId) {
+            patchActive({ intent: v });
+        }
+    };
+    const patchTask = (v: string) => {
+        setTaskId(v);
+        if (hasToken && activeId) {
+            patchActive({ taskId: v });
+        }
+    };
+
     return (
         <div className="flex min-h-[min(70vh,640px)] flex-1 flex-col gap-3">
             {!hasToken && (
@@ -353,47 +431,83 @@ export function ChatPage() {
                                 <Input className="mt-1 font-mono text-xs" value={sessionKeyDisplay} readOnly />
                             </label>
                             <label className="block text-[11px] text-slate-600 dark:text-slate-400">
-                                agentId
-                                <Input
+                                {t("chat.agentIdLabel")}
+                                <Select
                                     className="mt-1"
-                                    value={agentId}
+                                    value={agentSelectValue}
                                     onChange={(e) => {
                                         const v = e.target.value;
-                                        setAgentId(v);
-                                        if (hasToken && activeId) {
-                                            patchActive({ agentId: v });
+                                        if (v === "__custom__") {
+                                            patchAgent(agentInList ? "" : agentId);
+                                        } else {
+                                            patchAgent(v);
                                         }
                                     }}
-                                    placeholder="main"
-                                />
+                                >
+                                    {agentOptions.map((a) => (
+                                        <option key={a.id} value={a.id}>
+                                            {a.label}
+                                        </option>
+                                    ))}
+                                    <option value="__custom__">{t("chat.agentCustom")}</option>
+                                </Select>
+                                {agentSelectValue === "__custom__" && (
+                                    <Input
+                                        className="mt-1"
+                                        value={agentId}
+                                        onChange={(e) => patchAgent(e.target.value)}
+                                        placeholder="main"
+                                    />
+                                )}
                             </label>
                             <label className="block text-[11px] text-slate-600 dark:text-slate-400">
                                 {t("chat.intentOpt")}
-                                <Input
+                                <Select
                                     className="mt-1"
-                                    value={intent}
-                                    onChange={(e) => {
-                                        const v = e.target.value;
-                                        setIntent(v);
-                                        if (hasToken && activeId) {
-                                            patchActive({ intent: v });
-                                        }
-                                    }}
-                                />
+                                    value={intent.trim() || ""}
+                                    onChange={(e) => patchIntent(e.target.value)}
+                                >
+                                    <option value="">{t("chat.intentNone")}</option>
+                                    <option value="chat">chat</option>
+                                    <option value="daily_report">daily_report</option>
+                                    <option value="code_review">code_review</option>
+                                </Select>
                             </label>
-                            <label className="block text-[11px] text-slate-600 dark:text-slate-400">
+                            <label className="block text-[11px] text-slate-600 dark:text-slate-400 sm:col-span-2">
                                 {t("chat.taskIdOpt")}
-                                <Input
-                                    className="mt-1"
-                                    value={taskId}
+                                <Select
+                                    className="mt-1 font-mono text-xs"
+                                    value={taskSelectValue}
                                     onChange={(e) => {
                                         const v = e.target.value;
-                                        setTaskId(v);
-                                        if (hasToken && activeId) {
-                                            patchActive({ taskId: v });
+                                        if (v === "none") {
+                                            patchTask("");
+                                        } else if (v === "__custom__") {
+                                            patchTask(taskInRecent ? "" : taskId);
+                                        } else {
+                                            patchTask(v);
                                         }
                                     }}
-                                />
+                                >
+                                    <option value="none">{t("chat.taskIdNone")}</option>
+                                    {recentTasks.map((x) => (
+                                        <option key={x.taskId} value={x.taskId}>
+                                            {(x.title || x.taskId).length > 36
+                                                ? `${(x.title || x.taskId).slice(0, 36)}…`
+                                                : x.title || x.taskId}{" "}
+                                            · {x.taskId.length > 20 ? `${x.taskId.slice(0, 12)}…` : x.taskId}
+                                        </option>
+                                    ))}
+                                    <option value="__custom__">{t("chat.taskIdManual")}</option>
+                                </Select>
+                                {taskSelectValue === "__custom__" && (
+                                    <Input
+                                        className="mt-1 font-mono text-xs"
+                                        value={taskId}
+                                        onChange={(e) => patchTask(e.target.value)}
+                                        placeholder="task-…"
+                                    />
+                                )}
                             </label>
                         </div>
                         <div className="mt-2">
