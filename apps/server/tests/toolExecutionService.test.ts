@@ -128,7 +128,7 @@ describe("ToolExecutionService", () => {
         });
 
         const r = await svc.execute("slow_low", {});
-        expect(r).toContain("超时");
+        expect(r).toContain("TOOL_TIMEOUT");
         expect(count).toBe(2); // 首次 + 1 次重试
     });
 
@@ -168,7 +168,7 @@ describe("ToolExecutionService", () => {
         });
 
         const r = await svc.execute("slow_high", {});
-        expect(r).toContain("超时");
+        expect(r).toContain("TOOL_TIMEOUT");
         expect(count).toBe(1);
     });
 
@@ -245,7 +245,7 @@ describe("ToolExecutionService", () => {
         });
 
         const out = await svc.execute("danger_tool", {});
-        expect(out).toContain("超时");
+        expect(out).toContain("TOOL_TIMEOUT");
         expect(count).toBe(1);
     });
 });

@@ -407,7 +407,12 @@ export class ToolExecutionService {
 
             } catch (e: any) {
                 lastError = e;
-                if (attempt > maxRetries) break;
+                // 💡 关键修复：
+                // 如果已经达到最大重试次数，或者该工具本身就是高风险(riskLevel === "high")
+                // 应该立刻中断循环，不再进行下一次 attempt
+                if (attempt > maxRetries || def.riskLevel === "high") {
+                    break;
+                }
                 if (backoffMs > 0) await sleep(backoffMs);
             }
         }
