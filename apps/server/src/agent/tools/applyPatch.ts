@@ -18,9 +18,25 @@ export interface ApplyPatchOptions {
 }
 
 export function shouldCreateParentDirForWrite(fullPath: string): boolean {
+  // 1. 获取当前系统路径工具解析出的父目录
   const dir = path.dirname(fullPath);
+  
+  // 2. 获取当前系统路径工具解析出的根路径
   const root = path.parse(dir).root;
-  return !(root && dir === root);
+
+  // 💡 针对 Windows 盘符根路径的跨平台增强逻辑：
+  // 匹配形如 "C:\" 或 "D:/" 这种模式。盘符通常是单个字母加冒号。
+  // 在 Linux 上，path.dirname("D:\...") 会返回 "."，所以我们需要手动拦截盘符
+  const isWindowsRoot = /^[a-zA-Z]:[\\/]$/.test(dir);
+
+  // 3. 如果 dir 本身就是系统根目录，或者匹配 Windows 盘符根目录，则不应创建
+  if (root && dir === root) return false;
+  if (isWindowsRoot) return false;
+  
+  // 4. Linux/Unix 下常见的当前目录或根目录判断
+  if (dir === "." || dir === "/") return false;
+
+  return true;
 }
 
 /**
