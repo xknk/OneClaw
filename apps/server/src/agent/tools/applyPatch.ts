@@ -18,26 +18,27 @@ export interface ApplyPatchOptions {
 }
 
 export function shouldCreateParentDirForWrite(fullPath: string): boolean {
-  // 1. 获取当前系统路径工具解析出的父目录
-  const dir = path.dirname(fullPath);
+  // 1. 统一处理：将所有的反斜杠 \ 转为正斜杠 /，方便在任何系统下统一判断
+  const unifiedPath = fullPath.replace(/\\/g, '/');
   
-  // 2. 获取当前系统路径工具解析出的根路径
-  const root = path.parse(dir).root;
+  // 2. 获取目录部分
+  const lastSlashIndex = unifiedPath.lastIndexOf('/');
+  if (lastSlashIndex === -1) return false; // 就在当前目录，不需要创建父目录
 
-  // 💡 针对 Windows 盘符根路径的跨平台增强逻辑：
-  // 匹配形如 "C:\" 或 "D:/" 这种模式。盘符通常是单个字母加冒号。
-  // 在 Linux 上，path.dirname("D:\...") 会返回 "."，所以我们需要手动拦截盘符
-  const isWindowsRoot = /^[a-zA-Z]:[\\/]$/.test(dir);
+  const dir = unifiedPath.substring(0, lastSlashIndex);
 
-  // 3. 如果 dir 本身就是系统根目录，或者匹配 Windows 盘符根目录，则不应创建
-  if (root && dir === root) return false;
-  if (isWindowsRoot) return false;
-  
-  // 4. Linux/Unix 下常见的当前目录或根目录判断
-  if (dir === "." || dir === "/") return false;
+  // 3. 判断是否为根目录
+  // 情况 A: Unix/Linux 根目录 "/"
+  if (dir === "" || dir === "/") return false;
 
+  // 情况 B: Windows 盘符根目录 "C:" 或 "D:"
+  // 注意：unifiedPath 转换后，D:\ 变成了 D:
+  if (/^[a-zA-Z]:$/.test(dir)) return false;
+
+  // 情况 C: 如果 dir 包含更深层级（如 "D:/work" 或 "a/b"），则需要创建
   return true;
 }
+
 
 /**
  * 执行文件写入或修改操作
