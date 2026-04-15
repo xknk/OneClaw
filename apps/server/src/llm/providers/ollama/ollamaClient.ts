@@ -1,4 +1,4 @@
-import { postJson } from "@/infra/http/httpClient";
+import { postJson } from "@/infra/http/ollamaHttpClient";
 import { ollamaConfig } from "@/config/evn";
 import type {
     OllamaTool,

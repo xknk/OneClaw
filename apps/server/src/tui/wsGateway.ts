@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import type { UnifiedInboundMessage } from "@/channels/unifiedMessage";
 import { handleUnifiedChat } from "@/server/chatProcessing";
-import { ollamaConfig } from "@/config/evn";
+import { ollamaConfig, zhipuConfig } from "@/config/evn";
 
 const pkgDir = dirname(fileURLToPath(import.meta.url));
 let appVersion = "0";
@@ -17,6 +17,7 @@ try {
 }
 
 function parseClientMessage(raw: RawData): {
+    modelType?: "ollama" | "zhipu";
     type?: string;
     text?: string;
     requestId?: string;
@@ -57,7 +58,8 @@ export async function startTuiWsServer(port: number): Promise<{
             body: NonNullable<ReturnType<typeof parseClientMessage>>;
         }> = [];
         let draining = false;
-
+        // 💡 默认模型设为 zhipu
+        let currentModelType: "ollama" | "zhipu" | undefined = undefined; 
         const drainChatQueue = async (): Promise<void> => {
             if (draining) return;
             draining = true;
@@ -66,6 +68,10 @@ export async function startTuiWsServer(port: number): Promise<{
                     const item = chatQueue.shift();
                     if (!item?.body) continue;
                     const body = item.body;
+                    // 💡 在处理具体请求前，如果消息里带了 modelType，则更新当前连接的模型指向
+                    if (body.modelType === "ollama" || body.modelType === "zhipu") {
+                        currentModelType = body.modelType;
+                    }
                     if (body.type !== "chat" || typeof body.text !== "string") continue;
                     const text = body.text.trim();
                     if (!text) continue;
@@ -93,7 +99,7 @@ export async function startTuiWsServer(port: number): Promise<{
                         ...(typeof body.taskId === "string" && body.taskId.trim()
                             ? { taskId: body.taskId.trim() }
                             : {}),
-                    };
+                        modelType: currentModelType,                     };
 
                     try {
                         await handleUnifiedChat(inbound, async (outbound) => {
@@ -139,13 +145,13 @@ export async function startTuiWsServer(port: number): Promise<{
                 draining = false;
             }
         };
-
+        const config = currentModelType === "ollama" ? ollamaConfig : zhipuConfig;
         ws.send(
             JSON.stringify({
                 type: "ready",
                 version: appVersion,
-                model: ollamaConfig.modelName,
-                baseUrl: ollamaConfig.baseUrl,
+                model: currentModelType,
+                baseUrl: config.baseUrl,
             })
         );
 

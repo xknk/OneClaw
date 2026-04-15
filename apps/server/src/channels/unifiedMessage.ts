@@ -54,6 +54,10 @@ export interface UnifiedInboundMessage {
      * 为 true 时，后续路由/分类器不应覆盖用户显式的 agentId（需编排层配合）。
      */
     agentLocked?: boolean;
+    /**
+     * 模型类型：ollama 或 zhipu
+     */
+    modelType?: "ollama" | "zhipu";
 }
 
 /**

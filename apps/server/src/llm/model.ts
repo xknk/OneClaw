@@ -10,6 +10,7 @@ import type {
     ModelProvider,
 } from "./providers/ModelProvider";
 import { OllamaProvider } from "./providers/ollama/OllamaProvider";
+import { ZhiPuProvider } from "./providers/zhipu/ZhiPuProvider";
 
 export type { ChatMessage, AgentMessage, ToolSchema, ChatWithToolsResult };
 
@@ -17,9 +18,20 @@ function getDefaultProvider(): ModelProvider {
     return new OllamaProvider();
 }
 
+function getZhiPuProvider(): ModelProvider {
+    return new ZhiPuProvider();
+}
+
 /** 与当前配置的模型进行一轮普通对话 */
-export async function chatWithModel(messages: ChatMessage[]): Promise<string> {
-    const provider = getDefaultProvider();
+export async function chatWithModel(messages: ChatMessage[], type: "ollama" | "zhipu" = 'zhipu'): Promise<string> {
+    let provider: ModelProvider;
+    if (type === "ollama") {
+        provider = getDefaultProvider();
+    } else if (type === "zhipu") {
+        provider = getZhiPuProvider();
+    } else {
+        throw new Error("不支持的模型类型");
+    }
     return provider.chat(messages);
 }
 
@@ -29,9 +41,17 @@ export async function chatWithModel(messages: ChatMessage[]): Promise<string> {
  */
 export async function chatWithModelWithTools(
     messages: AgentMessage[],
-    tools: ToolSchema[]
+    tools: ToolSchema[],
+    type: "ollama" | "zhipu" = 'zhipu'
 ): Promise<ChatWithToolsResult> {
-    const provider = getDefaultProvider();
+    let provider: ModelProvider;
+    if (type === "ollama") {
+        provider = getDefaultProvider();
+    } else if (type === "zhipu") {
+        provider = getZhiPuProvider();
+    } else {
+        throw new Error("不支持的模型类型");
+    }
     if (typeof provider.chatWithTools !== "function") {
         throw new Error("当前模型不支持工具调用，请使用支持 tool calling 的模型（如 Ollama 的 qwen3）");
     }

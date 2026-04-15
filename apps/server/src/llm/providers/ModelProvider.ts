@@ -1,12 +1,3 @@
-// export type ChatMessage = {
-//     role: "system" | "user" | "assistant";
-//     content: string;
-// };
-
-// export interface ModelProvider {
-//     chat(messages: ChatMessage[]): Promise<string>;
-// }
-
 export type ChatMessage = {
     role: "system" | "user" | "assistant";
     content: string;
@@ -26,7 +17,9 @@ export type ToolSchema = {
 /** 带工具的一轮对话返回：正文 + 本轮的 tool_calls */
 export type ChatWithToolsResult = {
     content: string;
-    toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
+    toolCalls: Array<{
+        id?: string; name: string; args: Record<string, unknown>
+    }>;
 };
 
 /** 工具结果消息（用于多轮时把工具输出塞回对话） */
@@ -40,7 +33,9 @@ export type ToolResultMessage = {
 export type AssistantWithToolCallsMessage = {
     role: "assistant";
     content: string;
-    tool_calls: Array<{ name: string; args: Record<string, unknown> }>;
+    tool_calls: Array<{
+        id: string; name: string; args: Record<string, unknown>
+    }>;
 };
 
 /** Agent 多轮对话中的消息：普通对话 | 带 tool_calls 的 assistant | 工具结果 */

@@ -13,7 +13,7 @@ import type {
     ToolSchema,
     ChatWithToolsResult,
 } from "@/llm/providers/ModelProvider";
-import { chatWithModelWithTools } from "@/llm/model";
+import { chatWithModelWithTools, chatWithModel } from "@/llm/model";
 import { getTool, getToolSchemas } from "./tools/index";
 import type { ToolGuardResult } from "@/security/toolGuard";
 import { normalizeToolGuardResult } from "@/security/toolGuard";
@@ -113,7 +113,6 @@ export async function runAgent(
     const agentMessages: AgentMessage[] = [...messages];
     let round = 0;
     let lastContent = "";
-
     // --- ReAct 核心循环开始 ---
     while (round < maxRounds) {
         round++;
@@ -159,7 +158,7 @@ export async function runAgent(
         agentMessages.push({
             role: "assistant",
             content,
-            tool_calls: toolCalls.map((tc) => ({ name: tc.name, args: tc.args })),
+            tool_calls: toolCalls.map((tc) => ({ id: tc.id ?? "", name: tc.name, args: tc.args })),
         });
 
         // 3. 执行行动 (Acting)：并行或串行处理模型请求的所有工具

@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { UiLocale } from "@/config/evn";
-import { appConfig, ollamaConfig } from "@/config/evn";
+import { appConfig, ollamaConfig, zhipuConfig } from "@/config/evn";
 import { getAgentRegistryPath } from "@/agent/loadAgentRegistry";
 import { resolveMcpServersFilePathForAdmin } from "@/config/mcpConfig";
 import { getConfigDir, getTaskTemplatesFilePath } from "@/config/runtimePaths";
@@ -84,11 +84,17 @@ export function tuiStatusLines(
             `  agentId: ${opts.agentId ?? na}`,
             `  taskId: ${opts.taskId ?? na}`,
             "",
-            "Config:",
+            "Ollama Config:",
             `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
             `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
             `  skillsDir → ${appConfig.skillsDir}`,
             `  Ollama → ${ollamaConfig.baseUrl} · model ${ollamaConfig.modelName}`,
+            "",
+            "ZhiPu Config:",
+            `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
+            `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
+            `  skillsDir → ${appConfig.skillsDir}`,
+            `  ZhiPu → ${zhipuConfig.baseUrl} · model ${zhipuConfig.modelName}`,
         ].join("\n");
     }
     return [
@@ -97,11 +103,17 @@ export function tuiStatusLines(
         `  agentId: ${opts.agentId ?? "(未指定)"}`,
         `  taskId: ${opts.taskId ?? "(未指定)"}`,
         "",
-        "配置摘要:",
+        "Ollama配置摘要:",
         `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
         `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
         `  skillsDir → ${appConfig.skillsDir}`,
         `  Ollama → ${ollamaConfig.baseUrl} · model ${ollamaConfig.modelName}`,
+        "",
+        "ZhiPu配置摘要:",
+        `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
+        `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
+        `  skillsDir → ${appConfig.skillsDir}`,
+        `  ZhiPu → ${zhipuConfig.baseUrl} · model ${zhipuConfig.modelName}`,
     ].join("\n");
 }
 
@@ -210,7 +222,13 @@ export function replStatusLines(
                   `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
                   `  skillsDir → ${appConfig.skillsDir}`,
                   `  Ollama → ${ollamaConfig.baseUrl} · model ${ollamaConfig.modelName}`,
-              ]
+                  "",
+                  "ZhiPu配置摘要:",
+                  `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
+                  `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
+                  `  skillsDir → ${appConfig.skillsDir}`,
+                  `  ZhiPu → ${zhipuConfig.baseUrl} · model ${zhipuConfig.modelName}`,
+                ]
             : [
                   "REPL 状态:",
                   `  sessionKey: ${opts.sessionKey}`,
@@ -218,12 +236,18 @@ export function replStatusLines(
                   `  taskId: ${opts.taskId ?? "(未指定)"}`,
                   `  verbose: ${opts.verbose}`,
                   "",
-                  "配置摘要:",
+                  "Ollama配置摘要:",
                   `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
                   `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
                   `  skillsDir → ${appConfig.skillsDir}`,
                   `  Ollama → ${ollamaConfig.baseUrl} · model ${ollamaConfig.modelName}`,
-              ];
+                  "",
+                  "ZhiPu配置摘要:",
+                  `  ONECLAW_DATA_DIR → ${appConfig.dataDir}`,
+                  `  userWorkspaceDir → ${appConfig.userWorkspaceDir}`,
+                  `  skillsDir → ${appConfig.skillsDir}`,
+                  `  ZhiPu → ${zhipuConfig.baseUrl} · model ${zhipuConfig.modelName}`,
+                ];
     if (opts.verbose) {
         head.push(locale === "en" ? "verbose: on." : "当前: verbose=开。");
     }

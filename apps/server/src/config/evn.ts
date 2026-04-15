@@ -72,8 +72,20 @@ export const ollamaConfig = {
     repeatPenalty: num("OLLAMA_REPEAT_PENALTY", 1.2),
     numPredict: num("OLLAMA_NUM_PREDICT", 512),
 } as const;
-
 export type OllamaConfig = typeof ollamaConfig;
+
+export const zhipuConfig = {
+    modelName: str("ZHIPU_MODEL_NAME", ""),
+    baseUrl: str("ZHIPU_BASE_URL", ""),
+    apiKey: str("ZHIPU_API_KEY", ""),
+    stream: bool("ZHIPU_STREAMING", false),
+    temperature: num("ZHIPU_TEMPERATURE", 0.6),
+    topP: num("ZHIPU_TOP_P", 0.95),
+    thinking: { enable: bool("ZHIPU_THINKING_ENABLE", false) },
+    timeout: num("ZHIPU_CONNECT_TIMEOUT", 120000),
+} as const;
+export type ZhipuConfig = typeof zhipuConfig;
+
 const _DataDir = str("ONECLAW_DATA_DIR", path.join(os.homedir(), ".oneclaw"));
 const _userWorkspaceDirStr = str("ONECLAW_USER_WORKSPACE_DIR", path.join(_DataDir, "workspace"));
 export const appConfig = {
@@ -123,9 +135,9 @@ export const appConfig = {
     dailyReportScheduleMinute: Math.min(59, Math.max(0, num("ONECLAW_DAILY_REPORT_SCHEDULE_MINUTE", 0))),
     /** V4 M3：带 taskId 的任务是否对 exec/apply_patch 强制待审批 */
     taskHighRiskApprovalEnabled: bool("ONECLAW_TASK_HIGH_RISK_APPROVAL", true),
-        /**
-     * MCP：单次 listTools（含 connect）最大等待毫秒；超时视为该 MCP 不可用，上层跳过工具列表。
-     */
+    /**
+ * MCP：单次 listTools（含 connect）最大等待毫秒；超时视为该 MCP 不可用，上层跳过工具列表。
+ */
     mcpListToolsTimeoutMs: num("ONECLAW_MCP_LIST_TOOLS_TIMEOUT_MS", 10_000),
     /** 内置 fetch_url 是否启用 */
     fetchUrlEnabled: bool("ONECLAW_FETCH_URL_ENABLED", true),
