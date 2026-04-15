@@ -280,7 +280,7 @@ export async function handleUnifiedChat(
         ctx: toolExecutionCtx,
         // 【关键安全钩子】：在工具真正执行前拦截并进行权限评估
         toolGuard: (toolName, args) =>
-            evaluateToolPermission({ channelId: inbound.channelId, sessionKey, agentId, profileId }, toolName, args),
+            evaluateToolPermission({ channelId: inbound.channelId, sessionKey, agentId, profileId, userText }, toolName, args),
         onFinished: async (event) => {
             // 工具执行完后记录详细日志
             const line = makeToolCallLog({ ...event, traceId, sessionKey, agentId });

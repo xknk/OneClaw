@@ -30,6 +30,12 @@ describe("checkToolPermission", () => {
         expect(checkToolPermission(c, "exec", { command: "rm -rf /" })).toMatch(/allowlist/);
     });
 
+    it("文件变更类 exec 命令应提示改用 apply_patch", () => {
+        const c = ctx({ profileId: "webchat_default" });
+        const msg = checkToolPermission(c, "exec", { command: "mkdir D:\\update" });
+        expect(msg).toMatch(/apply_patch/);
+    });
+
     it("webchat_default 应拒绝含 shell 串联/注入片段的命令（参数级策略）", () => {
         const c = ctx({ profileId: "webchat_default" });
         expect(checkToolPermission(c, "exec", { command: "npm run lint && rm -rf /" })).toMatch(/禁止片段/);
@@ -72,6 +78,13 @@ describe("evaluateToolPermission", () => {
         if (!r.allow) expect(r.errorCode).toBe("POLICY_EXEC_ALLOWLIST");
     });
 
+    it("文件变更类 exec 命令 -> POLICY_EXEC_FILE_OP_USE_APPLY_PATCH", () => {
+        const c = ctx({ profileId: "webchat_default" });
+        const r = evaluateToolPermission(c, "exec", { command: "mkdir D:\\update" });
+        expect(r.allow).toBe(false);
+        if (!r.allow) expect(r.errorCode).toBe("POLICY_EXEC_FILE_OP_USE_APPLY_PATCH");
+    });
+
     it("敏感路径 denylist -> POLICY_PATH_DENYLIST", () => {
         const c = ctx({ profileId: "qq_group" });
         const r = evaluateToolPermission(c, "read_file", { path: ".env" });
@@ -84,5 +97,25 @@ describe("evaluateToolPermission", () => {
         const r = evaluateToolPermission(c, "apply_patch", { path: "a.ts", content: "x" });
         expect(r.allow).toBe(false);
         if (!r.allow) expect(r.errorCode).toBe("POLICY_WRITE_FORBIDDEN");
+    });
+
+    it("用户明确要求 D 盘时，相对路径应被拒绝", () => {
+        const c = ctx({ profileId: "webchat_default", userText: "帮我在d盘下面创建一个time.txt" });
+        const r = evaluateToolPermission(c, "apply_patch", { path: "time.txt", content: "x" });
+        expect(r.allow).toBe(false);
+        if (!r.allow) expect(r.errorCode).toBe("POLICY_WRITE_PATH_ABSOLUTE_REQUIRED");
+    });
+
+    it("用户明确要求 D 盘时，其他盘绝对路径应被拒绝", () => {
+        const c = ctx({ profileId: "webchat_default", userText: "请写到D盘" });
+        const r = evaluateToolPermission(c, "apply_patch", { path: "C:\\time.txt", content: "x" });
+        expect(r.allow).toBe(false);
+        if (!r.allow) expect(r.errorCode).toBe("POLICY_WRITE_PATH_DRIVE_MISMATCH");
+    });
+
+    it("用户明确要求 D 盘时，D 盘绝对路径应放行", () => {
+        const c = ctx({ profileId: "webchat_default", userText: "请写到D盘" });
+        const r = evaluateToolPermission(c, "apply_patch", { path: "D:\\time.txt", content: "x" });
+        expect(r.allow).toBe(true);
     });
 });

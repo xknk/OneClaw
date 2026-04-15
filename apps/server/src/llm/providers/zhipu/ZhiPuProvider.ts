@@ -5,8 +5,8 @@ import type {
     ToolSchema,
     ChatWithToolsResult,
 } from "../ModelProvider";
-import { chatWithZhiPu } from "./zhipuClient";
-import { chatWithZhiPuWithTools } from "./zhipuClient";
+import { chatWithZhiPu } from "./ZhiPuClient";
+import { chatWithZhiPuWithTools } from "./ZhiPuClient";
 
 export class ZhiPuProvider implements ModelProvider {
     async chat(messages: ChatMessage[]): Promise<string> {  

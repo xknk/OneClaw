@@ -17,6 +17,12 @@ export interface ApplyPatchOptions {
   mode?: ApplyPatchMode; // 写入模式，默认为 "replace"
 }
 
+export function shouldCreateParentDirForWrite(fullPath: string): boolean {
+  const dir = path.dirname(fullPath);
+  const root = path.parse(dir).root;
+  return !(root && dir === root);
+}
+
 /**
  * 执行文件写入或修改操作
  * @param options 包含路径、内容和模式的配置对象
@@ -30,7 +36,9 @@ export async function applyPatch(options: ApplyPatchOptions): Promise<string> {
   // 自动创建父级目录
   // 例如写入 'a/b/c.txt'，如果文件夹 'a' 或 'b' 不存在，则递归创建它们
   const dir = path.dirname(fullPath);
-  await fs.mkdir(dir, { recursive: true });
+  if (shouldCreateParentDirForWrite(fullPath)) {
+    await fs.mkdir(dir, { recursive: true });
+  }
 
   // 根据模式执行写入
   if (mode === "append") {

@@ -24,6 +24,8 @@ export interface PolicyContext {
     sessionKey: string; // 会话ID
     agentId: string; // 代理ID
     profileId: PermissionProfileId; // 权限配置文件ID
+    /** 当前用户输入原文（用于意图约束，如“写到 D 盘”） */
+    userText?: string;
 }
 /**
  * 权限配置文件
@@ -153,6 +155,43 @@ function deny(message: string, code: string, auditMeta?: Record<string, unknown>
     return { allow: false, message, errorCode: code, auditMeta };
 }
 
+function detectRequestedWindowsDrive(text: string | undefined): string | null {
+    if (!text) return null;
+    const byChineseDrive = text.match(/([a-zA-Z])盘/);
+    if (byChineseDrive?.[1]) return byChineseDrive[1].toUpperCase();
+    const byAbsPath = text.match(/\b([a-zA-Z]):[\\/]/);
+    if (byAbsPath?.[1]) return byAbsPath[1].toUpperCase();
+    return null;
+}
+
+function validateApplyPatchDriveIntent(
+    userText: string | undefined,
+    pathArg: string,
+): { ok: true } | { ok: false; message: string; code: string; meta: Record<string, unknown> } {
+    const expectedDrive = detectRequestedWindowsDrive(userText);
+    if (!expectedDrive) return { ok: true };
+
+    const m = pathArg.match(/^([a-zA-Z]):[\\/]/);
+    if (!m?.[1]) {
+        return {
+            ok: false,
+            code: "POLICY_WRITE_PATH_ABSOLUTE_REQUIRED",
+            message: `参数错误：你要求写入 ${expectedDrive}: 盘，path 必须是该盘绝对路径（如 ${expectedDrive}:\\\\time.txt）。`,
+            meta: { expectedDrive, path: pathArg },
+        };
+    }
+    const actualDrive = m[1].toUpperCase();
+    if (actualDrive !== expectedDrive) {
+        return {
+            ok: false,
+            code: "POLICY_WRITE_PATH_DRIVE_MISMATCH",
+            message: `参数错误：你要求写入 ${expectedDrive}: 盘，但当前 path 位于 ${actualDrive}: 盘（${pathArg}）。`,
+            meta: { expectedDrive, actualDrive, path: pathArg },
+        };
+    }
+    return { ok: true };
+}
+
 /** exec：长度与禁止子串（与 execPolicy 行为一致，附带 errorCode） */
 function checkExecArgsPolicy(
     command: string,
@@ -177,6 +216,13 @@ function checkExecArgsPolicy(
         }
     }
     return null;
+}
+
+function isLikelyFileMutationCommand(command: string): boolean {
+    const c = command.trim().toLowerCase();
+    return /^(mkdir|md|new-item)\b/.test(c)
+        || /\>\s*[^|]+$/.test(c)
+        || /^(copy|move|ren|rename|del|erase|rmdir|rd)\b/.test(c);
 }
 
 /**
@@ -226,6 +272,10 @@ export function evaluateToolPermission(
         }
         const pathArg = typeof args?.path === "string" ? args.path : "";
         if (!pathArg.trim()) return deny("参数错误：apply_patch 需要 path", "POLICY_WRITE_PATH_REQUIRED");
+        const pathIntent = validateApplyPatchDriveIntent(ctx.userText, pathArg.trim());
+        if (!pathIntent.ok) {
+            return deny(pathIntent.message, pathIntent.code, { ...pathIntent.meta, ...pid });
+        }
         const v = checkPathPolicy(pathArg, pOpt);
         if (v) return deny(v.message, v.code, { ...v.meta, ...pid });
         return { allow: true };
@@ -310,6 +360,13 @@ export function evaluateToolPermission(
         if (allowlist.length > 0) {
             const matched = allowlist.some((re) => re.test(command));
             if (!matched) {
+                if (isLikelyFileMutationCommand(command)) {
+                    return deny(
+                        "无权限：检测到文件/目录变更命令，请改用 apply_patch 工具；若目标在 D 盘，请传绝对路径（如 D:\\time.txt）。",
+                        "POLICY_EXEC_FILE_OP_USE_APPLY_PATCH",
+                        { permissionProfileId: ctx.profileId, commandSample: command.slice(0, 120) }
+                    );
+                }
                 return deny(
                     `无权限：命令不在 allowlist 中: ${command}`,
                     "POLICY_EXEC_ALLOWLIST",

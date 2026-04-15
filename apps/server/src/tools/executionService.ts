@@ -211,22 +211,25 @@ export class ToolExecutionService {
      */
     async execute(name: string, args: Record<string, unknown> | undefined): Promise<string> {
         const totalStarted = Date.now();
-        // 检查是否超过单请求最大调用次数
-        const used = (this.callCount.get(name) ?? 0) + 1;
-        // 更新调用次数
-        this.callCount.set(name, used);
-        
+
+        // --- 0. 修正后的初始 Trace ---
+        // 移除了 errorCode，并将 ok 设为 true，代表流程正常启动
         await this.trace?.("tool.execute.start", {
             toolName: name,
             toolSource: "guard",
-            ok: false,
-            durationMs: Date.now() - totalStarted,
-            errorCode: "TOOL_CALL_LIMIT_EXCEEDED",
+            ok: true,
+            durationMs: 0,
             attempt: 1,
         });
-        // 如果超过单请求最大调用次数，则返回错误描述
+
+        // 检查是否超过单请求最大调用次数
+        const used = (this.callCount.get(name) ?? 0) + 1;
+        this.callCount.set(name, used);
+
         if (used > this.maxCallsPerToolPerRequest) {
             const msg = `无权限：工具 ${name} 超过单请求最大调用次数 ${this.maxCallsPerToolPerRequest}`;
+            const errorCode = "TOOL_CALL_LIMIT_EXCEEDED";
+
             await this.onFinished?.({
                 toolName: name,
                 args,
@@ -234,7 +237,7 @@ export class ToolExecutionService {
                 ok: false,
                 durationMs: Date.now() - totalStarted,
                 source: "guard",
-                errorCode: "TOOL_CALL_LIMIT_EXCEEDED",
+                errorCode,
                 attempt: 1,
             });
             await this.trace?.("tool.failed", {
@@ -242,12 +245,11 @@ export class ToolExecutionService {
                 toolSource: "guard",
                 ok: false,
                 durationMs: Date.now() - totalStarted,
-                errorCode: "TOOL_CALL_LIMIT_EXCEEDED",
+                errorCode,
                 attempt: 1,
             });
             return msg;
         }
-
 
         // --- 第一步：安全守卫 ---
         const guard = normalizeToolGuardResult(this.toolGuard?.(name, args));
@@ -281,210 +283,140 @@ export class ToolExecutionService {
             name, this.ctx,
             { health: this.health }
         );
+
+        // 💡 这里的 resolved.definition 包含了工具的只读元数据
+        // 供上层 runTools 判断 isConcurrencySafe
         await this.trace?.("tool.resolve", {
             toolName: name,
             toolSource: resolved?.definition.source,
-            meta: { providerId: resolved?.provider.id },
+            meta: {
+                providerId: resolved?.provider.id,
+                // 记录该工具是否为只读，方便在 Trace 中分析并发行为
+                isReadOnly: resolved?.definition.riskLevel === "low"
+            },
         });
-        // 工具未找到，返回错误描述
+
         if (!resolved) {
             const msg = `错误：未知工具 "${name}"`;
+            const errorCode = "TOOL_NOT_FOUND";
             await this.onFinished?.({
-                toolName: name, // 工具名称
-                args, // 工具入参
-                result: msg, // 工具执行结果
-                ok: false, // 工具执行是否成功
-                durationMs: Date.now() - totalStarted, // 工具执行耗时
-                source: "registry", // 执行来源
-                errorCode: "TOOL_NOT_FOUND",
-            }); // 工具未找到，返回错误描述
+                toolName: name,
+                args,
+                result: msg,
+                ok: false,
+                durationMs: Date.now() - totalStarted,
+                source: "registry",
+                errorCode,
+            });
             await this.trace?.("tool.failed", {
                 toolName: name,
                 toolSource: "registry",
                 ok: false,
                 durationMs: Date.now() - totalStarted,
-                errorCode: "TOOL_NOT_FOUND",
+                errorCode,
                 attempt: 1,
             });
             return msg;
         }
+
         // --- 第三步：参数格式验证 ---
         const validationError = validateArgs(resolved.definition.schema, args);
-        if (validationError) { // 参数格式验证失败，返回错误描述
+        if (validationError) {
+            const errorCode = "TOOL_ARG_ERROR";
             await this.onFinished?.({
-                toolName: name, // 工具名称
-                args, // 工具入参
-                result: validationError, // 工具执行结果
-                ok: false, // 工具执行是否成功
-                durationMs: Date.now() - totalStarted, // 工具执行耗时
-                source: resolved.definition.source, // 执行来源
-                errorCode: "TOOL_ARG_ERROR",
-            }); // 参数格式验证失败，返回错误描述
+                toolName: name,
+                args,
+                result: validationError,
+                ok: false,
+                durationMs: Date.now() - totalStarted,
+                source: resolved.definition.source,
+                errorCode,
+            });
             await this.trace?.("tool.validation.failed", {
                 toolName: name,
                 toolSource: resolved.definition.source,
                 ok: false,
                 durationMs: Date.now() - totalStarted,
-                errorCode: "TOOL_ARG_ERROR",
+                errorCode,
                 attempt: 1,
             });
             return validationError;
         }
 
-
-        // 4) 超时与重试策略
-        const def = resolved.definition; // 工具定义
-        const timeoutMs = def.timeoutMs ?? this.defaultTimeoutMs; // 超时时间（毫秒）
+        // --- 第四步：超时与重试策略 ---
+        const def = resolved.definition;
+        const timeoutMs = def.timeoutMs ?? this.defaultTimeoutMs;
         const maxRetries =
             def.retryPolicy?.maxRetries ??
-            (def.riskLevel === "low" ? this.defaultLowRiskRetries : 0); // 最大重试次数
-        const backoffMs = def.retryPolicy?.backoffMs ?? this.defaultBackoffMs; // 重试间隔（毫秒）
+            (def.riskLevel === "low" ? this.defaultLowRiskRetries : 0);
+        const backoffMs = def.retryPolicy?.backoffMs ?? this.defaultBackoffMs;
 
-        let attempt = 0; // 重试次数
-        let last: ToolExecutionResult | null = null; // 上一次执行结果
+        let attempt = 0;
+        let lastError: any = null;
+
         while (attempt <= maxRetries) {
             attempt++;
-            const started = Date.now(); // 开始时间（毫秒）
             try {
                 const result = await withTimeout(
                     resolved.provider.execute(name, args, this.ctx),
                     timeoutMs
                 );
+
                 if (!result) {
-                    const msg = `错误：工具 "${name}" 已声明但无可执行实现`;
+                    throw new Error("TOOL_IMPL_MISSING");
+                }
+
+                if (result.ok) {
                     await this.onFinished?.({
                         toolName: name,
                         args,
-                        result: msg,
-                        ok: false,
-                        durationMs: Date.now() - totalStarted,
-                        source: def.source,
+                        result: result.content,
+                        ok: true,
+                        durationMs: result.durationMs,
+                        source: result.source,
                         attempt,
-                        errorCode: "TOOL_IMPL_MISSING",
-                    });
-                    await this.trace?.("tool.failed", {
-                        toolName: name,
-                        toolSource: resolved.definition.source,
-                        ok: false,
-                        durationMs: Date.now() - totalStarted,
-                        errorCode: "TOOL_IMPL_MISSING",
-                        attempt,
-                    });
-                    return msg;
-                }
-                last = result;
-                if (result.ok) {
-                    await this.onFinished?.({ // 工具执行成功，返回结果
-                        toolName: name, // 工具名称
-                        args, // 工具入参
-                        result: result.content, // 工具执行结果
-                        ok: result.ok, // 工具执行是否成功
-                        durationMs: result.durationMs, // 工具执行耗时
-                        source: result.source, // 执行来源
-                        attempt, // 重试次数
                     });
                     await this.trace?.("tool.execute.end", {
                         toolName: name,
-                        toolSource: result.source ?? resolved.definition.source,
-                        ok: result.ok,
+                        toolSource: result.source ?? def.source,
+                        ok: true,
                         durationMs: result.durationMs,
-                        errorCode: result.errorCode,
                         attempt,
                     });
-                    return result.content; // 返回工具执行结果
+                    return result.content;
                 }
-                // 如果需要重试，则等待重试间隔后继续重试
-                const retry = shouldRetry(def, result, attempt, maxRetries);
-                if (retry) {
-                    if (backoffMs > 0) await sleep(backoffMs);
-                    continue;
-                }
-                await this.onFinished?.({ // 工具执行失败，返回结果
-                    toolName: name,
-                    args, // 工具入参
-                    result: result.content, // 工具执行结果
-                    ok: false, // 工具执行是否成功
-                    durationMs: Date.now() - totalStarted, // 工具执行耗时
-                    source: result.source ?? def.source, // 执行来源
-                    attempt, // 重试次数
-                    errorCode: result.errorCode, // 错误代码
-                });
-                await this.trace?.("tool.failed", {
-                    toolName: name,
-                    toolSource: resolved.definition.source,
-                    ok: false,
-                    durationMs: result.durationMs,
-                    attempt,
-                    errorCode: result.errorCode,
 
-                });
-                return result.content; // 返回工具执行结果
-            } catch (err) {
-                // 如果超时，则返回超时错误
-                const timeoutResult =
-                    err instanceof Error && err.message === "TOOL_TIMEOUT"
-                        ? toTimeoutError(name, timeoutMs, started, def.source)
-                        : {
-                            ok: false,
-                            toolName: name,
-                            source: def.source,
-                            errorCode: "TOOL_EXEC_ERROR",
-                            errorMessage: err instanceof Error ? err.message : String(err),
-                            content: `工具执行失败: ${err instanceof Error ? err.message : String(err)}`,
-                            durationMs: Date.now() - started,
-                        };
-                // 更新上一次执行结果
-                last = timeoutResult;
-                // 如果需要重试，则等待重试间隔后继续重试
-                const retry = shouldRetry(def, timeoutResult, attempt, maxRetries);
-                // 如果需要重试，则等待重试间隔后继续重试
-                if (retry) {
+                // 检查是否重试
+                if (shouldRetry(def, result, attempt, maxRetries)) {
                     if (backoffMs > 0) await sleep(backoffMs);
                     continue;
                 }
-                // 工具执行失败，返回结果
+
+                // 执行失败但不重试的情况
                 await this.onFinished?.({
-                    toolName: name, // 工具名称
-                    args, // 工具入参
-                    result: timeoutResult.content, // 工具执行结果
-                    ok: false, // 工具执行是否成功
-                    durationMs: Date.now() - totalStarted, // 工具执行耗时
-                    source: timeoutResult.source ?? def.source, // 执行来源
-                    attempt, // 重试次数
-                    errorCode: timeoutResult.errorCode, // 错误代码
-                });
-                await this.trace?.("tool.failed", {
                     toolName: name,
-                    toolSource: resolved.definition.source,
+                    args,
+                    result: result.content,
                     ok: false,
                     durationMs: Date.now() - totalStarted,
-                    errorCode: timeoutResult?.errorCode ?? "TOOL_EXEC_ERROR",
+                    source: result.source ?? def.source,
                     attempt,
+                    errorCode: result.errorCode,
                 });
-                return timeoutResult.content;
+                return result.content;
+
+            } catch (e: any) {
+                lastError = e;
+                if (attempt > maxRetries) break;
+                if (backoffMs > 0) await sleep(backoffMs);
             }
         }
-        const fallback = last?.content ?? `工具执行失败: ${name}`;
-        await this.onFinished?.({
-            toolName: name,
-            args,
-            result: fallback,
-            ok: false,
-            durationMs: Date.now() - totalStarted,
-            source: resolved.definition.source,
-            attempt: maxRetries + 1,
-            errorCode: last?.errorCode ?? "TOOL_EXEC_ERROR",
-        });
-        await this.trace?.("tool.failed", {
-            toolName: name,
-            toolSource: resolved.definition.source,
-            ok: false,
-            durationMs: Date.now() - totalStarted,
-            errorCode: last?.errorCode ?? "TOOL_EXEC_ERROR",
-            attempt: maxRetries + 1,
-        });
-        return fallback;
+
+        // 最终失败出口
+        const finalMsg = `工具执行失败: ${lastError?.message || "未知错误"}`;
+        return finalMsg;
     }
+
 }
 export function createRegistryWithProviders(providers: ToolProvider[]): ToolRegistry {
     const registry = new ToolRegistry();
