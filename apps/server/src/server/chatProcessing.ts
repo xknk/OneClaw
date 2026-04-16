@@ -3,7 +3,7 @@ import { runAgent } from "@/agent/runAgent";
 import { UnifiedInboundMessage, UnifiedOutboundMessage } from "@/channels/unifiedMessage";
 import { appConfig } from "@/config/evn";
 import { ChatMessage } from "@/llm/model";
-import { buildMessagesForModel } from "@/session/buildModelContext";
+import { buildMessagesForModel, triggerBackgroundMaintenance } from "@/session/buildModelContext";
 import {
     getOrCreateSessionId,
     getRollingState,
@@ -155,22 +155,26 @@ export async function handleUnifiedChat(
     let taskPrep: PrepareTaskForChatResult | undefined;
     if (taskId) {
         try {
+            // 返回任务信息
             taskPrep = await prepareTaskForChatRound(taskId);
         } catch (e) {
             console.error("[tasks] prepareTaskForChatRound failed:", e);
             taskPrep = undefined;
         }
     }
-
+    // 如果存在任务，则返回当前状态、meta信息等
     const runningStepForTrace = await resolveRunningPlanStepForChat(taskId, taskPrep);
-
+    // 根据信息判断使用哪个agent进行处理
     const { agentId, decisionSource } = resolveEffectiveAgent(inbound, runningStepForTrace);
-    const agent = getAgentConfig(agentId);
+    const agent = getAgentConfig(agentId); // 获取agent配置
+    // 获取权限组
     const profileId = resolveProfileId({ channelId: inbound.channelId, agentId });
+    // 获取用户输入
     const userText = normalizeTextForAgent(agentId, inbound.text);
 
     if (taskId) {
         try {
+            // 更新任务
             await updateTaskOrchestrationSnapshot(
                 taskId,
                 {
@@ -195,14 +199,15 @@ export async function handleUnifiedChat(
         decisionSource,
         ...(taskId
             ? {
-                  orchestrationId: taskId,
-                  ...(runningStepForTrace != null ? { stepIndex: runningStepForTrace.index } : {}),
-                  ...(runningStepForTrace?.role?.trim()
-                      ? { orchestrationRole: runningStepForTrace.role.trim() }
-                      : {}),
-              }
+                orchestrationId: taskId,
+                ...(runningStepForTrace != null ? { stepIndex: runningStepForTrace.index } : {}),
+                ...(runningStepForTrace?.role?.trim()
+                    ? { orchestrationRole: runningStepForTrace.role.trim() }
+                    : {}),
+            }
             : {}),
     };
+    // 开始链路追踪
     await emitTrace(traceBase, "session.start", {
         meta: {
             textLength: userText.length,
@@ -214,15 +219,21 @@ export async function handleUnifiedChat(
     });
 
     // --- 3. 记忆与上下文管理 ---
+
     await awaitRollingPrefetchIdle(sessionKey, agentId);
+    // 获取会话ID
     const sessionId = await getOrCreateSessionId(sessionKey, agentId);
+    // 从存储层读取历史
     const history = await readMessages(sessionId, agentId); // 从存储层读取历史
     await appendMessage(sessionId, "user", userText, agentId); // 存入本次用户输入
-
+    // 构建完整消息
     const fullMessages: ChatMessage[] = [...history, { role: "user", content: userText }];
 
+    // 获取摘要信息和归档消息数量
     const rollingIn = await getRollingState(sessionKey, agentId);
-    const built = await buildMessagesForModel(fullMessages, rollingIn);
+
+    const built = await buildMessagesForModel(fullMessages, rollingIn); // 构建完整消息
+
     let messages = built.messages;
     await setRollingState(sessionKey, agentId, built.rolling);
 
@@ -387,7 +398,9 @@ export async function handleUnifiedChat(
                 decisionSource,
             },
         });
-
+        // 再次获取历史信息
+        const storeHistory = await readMessages(sessionId, agentId);
+        const storeRollingIn = await getRollingState(sessionKey, agentId);
         // 如果关联了任务，且允许更新，则在时间线上记一笔
         if (taskId && taskPrep?.hooksEnabled) {
             await appendTimelineNoteSafe(taskId, "WebChat 轮次完成", {
@@ -398,6 +411,12 @@ export async function handleUnifiedChat(
                 notesOnly: taskPrep.notesOnly
             });
         }
+        // 触发后台摘要维护
+        await triggerBackgroundMaintenance(
+            storeHistory,
+            storeRollingIn,
+            async (next) => await setRollingState(sessionKey, agentId, next)
+        );
         await emitTrace(traceBase, "session.end", {
             ok: true,
             meta: { replyLength: replyText.length, taskId, userSessionKey, transcriptSessionKey: sessionKey },

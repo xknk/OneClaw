@@ -31,9 +31,10 @@ export async function ensureSessionsDir(agentId:string = agentIdKey): Promise<vo
 /** 从硬盘读取整个会话数据库 */
 export async function readStore(agentId:string = agentIdKey): Promise<SessionStore> {
     await ensureSessionsDir(agentId);
-    const p = getStorePath(agentId);
+    const p = getStorePath(agentId); // 先获取所有的sessionId信息
     try {
         const raw = await fs.readFile(p, "utf-8");
+        // 将文件内容解析为SessionStore对象
         const store = JSON.parse(raw) as SessionStore;
         // 简单校验格式，确保返回一个对象
         return typeof store === "object" && store !== null ? store : {};
@@ -104,11 +105,13 @@ export async function getRollingState(
     sessionKey: SessionKey,
     agentId: string = agentIdKey
 ): Promise<RollingState> {
+    // 更具agentId获取当前agent的会话信息
     const store = await readStore(agentId);
-    const e = store[sessionKey];
-    if (!e) return { rollingSummary: "", archivedMessageCount: 0 };
+    // 更具sessionKey获取会话信息
+    const e = store[sessionKey]; // 根据sessionKey获取sessionID
+    if (!e) return { rollingSummary: "", archivedMessageCount: 0 }; // 如果sessionID不存在，则返回空对象
     return {
-        rollingSummary: typeof e.rollingSummary === "string" ? e.rollingSummary : "",
+        rollingSummary: typeof e.rollingSummary === "string" ? e.rollingSummary : "", // 如果rollingSummary不是字符串，则返回空字符串
         archivedMessageCount:
             typeof e.archivedMessageCount === "number" && e.archivedMessageCount >= 0
                 ? e.archivedMessageCount

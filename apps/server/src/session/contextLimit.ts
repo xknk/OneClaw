@@ -8,7 +8,7 @@ export interface TrimMessagesOptions {
     maxMessages?: number;
 }
 
-/** 保守估算：中日文字符约 1 token，其余约 4 字符 1 token */
+/** 保守估算：中日文字符约 1 token，其余约 4 字符 1 token （可优化：可根据不同大模型进行不同token计算方式） */
 export function estimateTextTokens(text: string): number {
     if (!text) return 0;
     let cjk = 0;

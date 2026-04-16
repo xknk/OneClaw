@@ -117,7 +117,7 @@ export async function runAgent(
     while (round < maxRounds) {
         round++;
 
-        // 1. 发起推理请求
+        // 1. 记录模型生命周期事件，开始请求大模型
         await options?.onModelEvent?.({
             type: "llm.request",
             round,
