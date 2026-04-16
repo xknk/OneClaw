@@ -94,6 +94,8 @@ export const appConfig = {
     chatContextMaxMessages: num("ONECLAW_CHAT_CONTEXT_MAX_MESSAGES", 30),
     /** 对话历史（滚动摘要 + 原文尾）允许的最大估算 token；不含技能/任务等 prefix */
     chatHistoryMaxTokens: num("ONECLAW_CHAT_HISTORY_MAX_TOKENS", 6000),
+    /** 对话历史（滚动摘要 + 原文尾）保留最近 N 条消息，避免语音丢失 */
+    chatContextReserveMessages: num("ONECLAW_CHAT_CONTEXT_RESERVE_MESSAGES", 8),
     /** 单条消息超过此估算 token 时在条内从尾部截断 */
     chatSingleMessageMaxTokens: num("ONECLAW_CHAT_SINGLE_MESSAGE_MAX_TOKENS", 4000),
     /** @deprecated 已由 token 预算 + 滚动摘要替代；保留读取以兼容旧 .env */

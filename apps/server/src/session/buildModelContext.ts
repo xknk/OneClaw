@@ -1,16 +1,16 @@
 /**
- * 智能上下文组装工具
- * 核心：懒加载摘要、微压缩处理、语义锚点保护
+ * 智能上下文组装工具 (生产级 Cache 极致优化版)
  */
 
 import type { ChatMessage } from "@/llm/providers/ModelProvider";
 import { appConfig } from "@/config/evn";
 import {
     estimateMessagesTokens,
-    trimMessagesToTokenBudget,
+    trimMessagesToTokenBudget, // 👈 第三道防线：整体保底工具
+    estimateTextTokens,
     trimMessageContentTail,
 } from "@/session/contextLimit";
-import { mergeRollingSummary, summarizeMessages } from "@/session/summarizeContext";
+import { mergeRollingSummary } from "@/session/summarizeContext";
 import type { RollingState } from "@/session/store";
 
 export type BuildModelContextResult = {
@@ -18,33 +18,16 @@ export type BuildModelContextResult = {
     rolling: RollingState;
 };
 
-/**
- * 【微压缩】
- * 零成本减少 Token 消耗，清理冗余格式
- */
+// --- 【工具辅助函数】 ---
+
 function applyMicroCompression(content: string): string {
     return content
-        .replace(/\n{3,}/g, '\n\n') // 压缩多余换行
-        .replace(/[ \t]{3,}/g, ' ')  // 压缩多余空格
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/[ \t]{3,}/g, ' ')
         .trim();
 }
 
-/**
- * 【结构化包装】
- * 增加引导词，确保护持摘要信息的一致性
- */
-function summaryBlockMsgs(rollingSummary: string): ChatMessage[] {
-    const t = rollingSummary.trim();
-    if (!t.length) return [];
-    return [{ 
-        role: "system", 
-        content: `[前情提要/核心设定]\n${t}\n请务必保持对话事实的一致性。` 
-    }];
-}
-
-/**
- * 校验滚动状态
- */
 function sanitizeRolling(fullLen: number, rolling: RollingState): RollingState {
     if (rolling.archivedMessageCount > fullLen) {
         return { rollingSummary: "", archivedMessageCount: 0 };
@@ -52,118 +35,147 @@ function sanitizeRolling(fullLen: number, rolling: RollingState): RollingState {
     return rolling;
 }
 
+
 /**
- * 核心逻辑：组装上下文
+ * 【Cache 友好消息组装器】
+ * 将摘要后置，保护对话前缀缓存
  */
+function assembleMessages(summary: string, tail: ChatMessage[]): ChatMessage[] {
+    const msgs: ChatMessage[] = [];
+
+    // 1. 绝对不变的人设 (永远是缓存的起点)
+    msgs.push({ role: "system", content: "你是一个专业的助手。" });
+
+    // 2. 原始对话流 (只要摘要不插在中间，这部分缓存就稳固)
+    // 即使你增加了新消息，前缀依然匹配
+    msgs.push(...tail);
+
+    // 3. 【核心改动】将摘要放在最后
+    // 这样即便摘要从“无”变成“有”，或者从“版本A”变成“版本B”，
+    // 它都不会影响前面固定人设和 tail 对话的 Hash 匹配。
+    if (summary.trim()) {
+        msgs.push({ 
+            role: "system", 
+            content: `[历史背景归档]\n${summary.trim()}` 
+        });
+    }
+    return msgs;
+}
+
+// --- 【核心主流程】 ---
+
 export async function buildMessagesForModel(
     fullMessages: ChatMessage[],
     rolling: RollingState
 ): Promise<BuildModelContextResult> {
-    // 1. 初始化配置
-    const mergeChunk = Math.max(1, appConfig.chatRollingMergeChunk);
-    const maxHist = appConfig.chatHistoryMaxTokens;
-    const singleMax = appConfig.chatSingleMessageMaxTokens;
-    const maxMsg = appConfig.chatContextMaxMessages;
+    const MAX_HIST = appConfig.chatHistoryMaxTokens;
+    const MAX_MSG = appConfig.chatContextMaxMessages;
+    const MIN_RESERVE = appConfig.chatContextReserveMessages;
+    const SINGLE_MAX = appConfig.chatSingleMessageMaxTokens;
 
     let { rollingSummary, archivedMessageCount } = sanitizeRolling(fullMessages.length, rolling);
-    let rawTail = fullMessages.slice(archivedMessageCount);
 
-    // 2. 预检当前状态
-    const initialSb = summaryBlockMsgs(rollingSummary);
-    const currentTokens = estimateMessagesTokens([...initialSb, ...rawTail]);
+    const safeArchivedIdx = Math.min(
+        archivedMessageCount,
+        Math.max(0, fullMessages.length - MIN_RESERVE)
+    );
+    let rawTail = fullMessages.slice(safeArchivedIdx);
 
-    // --- 【策略优化：懒触发】 ---
-    // 只有当 Token 占用超过 90% 或者消息条数达到 100% 时，才触发昂贵的摘要更新
-    const isTokenTight = currentTokens > maxHist * 0.9;
-    const isCountOverflow = maxMsg > 0 && rawTail.length >= maxMsg;
+    // 1. 预检 Token
+    let currentTokens = estimateMessagesTokens(assembleMessages(rollingSummary, rawTail));
 
-    if (isTokenTight || isCountOverflow) {
-        // --- 【策略优化：大跳跃合并】 ---
-        // 为了避免频繁调用，一旦触发，就一次性合并掉“一整块”消息（例如总限额的 30%）
-        // 这样可以保证未来几轮对话都不需要再次生成摘要
+    // 2. 第一道防线：触发摘要合并策略 (Cache 友好型：高阈值 + 深度腾挪)
+    const isTokenTight = currentTokens > MAX_HIST * 0.95;
+    const isCountOverflow = MAX_MSG > 0 && rawTail.length >= MAX_MSG;
+
+    if ((isTokenTight || isCountOverflow) && rawTail.length > MIN_RESERVE) {
         let itemsToMerge = 0;
-        let tokensToReduce = 0;
-
         if (isCountOverflow) {
-            // 至少腾出 30% 的条数空间
-            itemsToMerge = Math.max(mergeChunk, Math.floor(maxMsg * 0.3));
+            itemsToMerge = rawTail.length - Math.floor(MAX_MSG * 0.4);
         } else {
-            // 至少腾出 20% 的 Token 空间
-            const targetReduction = maxHist * 0.2;
-            let acc = 0;
-            for (let i = 0; i < rawTail.length - 1; i++) {
-                acc += estimateMessagesTokens([rawTail[i]]);
+            const targetTokens = MAX_HIST * 0.4;
+            let acc = currentTokens;
+            for (let i = 0; i < rawTail.length - MIN_RESERVE; i++) {
+                acc -= estimateMessagesTokens([rawTail[i]]);
                 itemsToMerge++;
-                if (acc >= targetReduction) break;
+                if (acc <= targetTokens) break;
             }
         }
 
-        // 确保不会把所有消息都吸掉，至少留一条
-        itemsToMerge = Math.min(itemsToMerge, rawTail.length - 1);
+        itemsToMerge = Math.max(0, Math.min(itemsToMerge, rawTail.length - MIN_RESERVE));
 
         if (itemsToMerge > 0) {
             const batch = rawTail.slice(0, itemsToMerge).map(m => ({
                 ...m,
-                content: applyMicroCompression(m.content) // 合并前微压缩
+                content: applyMicroCompression(m.content)
             }));
-            rawTail = rawTail.slice(itemsToMerge);
-
-            // 执行一次性异步摘要合并
-            // 建议 mergeRollingSummary 内部 Prompt 使用“增量更新”模式
-            rollingSummary = await mergeRollingSummary(rollingSummary, batch);
-            archivedMessageCount += itemsToMerge;
+            try {
+                rollingSummary = await mergeRollingSummary(rollingSummary, batch);
+                archivedMessageCount = safeArchivedIdx + itemsToMerge;
+                rawTail = rawTail.slice(itemsToMerge);
+            } catch (e) {
+                console.error("[Context] Summary error:", e);
+            }
         }
     }
 
-    // 3. 极端边界处理：如果摘要+最后一条仍然超标
-    let sb = summaryBlockMsgs(rollingSummary);
-    if (estimateMessagesTokens([...sb, ...rawTail]) > maxHist) {
-        if (rawTail.length === 1) {
-            const budget = Math.max(10, maxHist - estimateMessagesTokens(sb) - 5);
-            rawTail[0].content = trimMessageContentTail(rawTail[0].content, budget);
-        } else if (estimateMessagesTokens(sb) > maxHist) {
-            rollingSummary = trimMessageContentTail(rollingSummary, maxHist - 20);
-            sb = summaryBlockMsgs(rollingSummary);
+    // 3. 第二道防线：显式处理单条“核弹级”长消息
+    if (rawTail.length > 0) {
+        const lastMsg = rawTail[rawTail.length - 1];
+        if (estimateTextTokens(lastMsg.content) > SINGLE_MAX) {
+            lastMsg.content = trimMessageContentTail(lastMsg.content, SINGLE_MAX);
         }
     }
 
-    // 4. 最终构建与严格裁剪
-    let core = trimMessagesToTokenBudget([...sb, ...rawTail], {
-        maxTokens: maxHist,
-        singleMessageMaxTokens: singleMax,
-    });
+    // 4. 组装最终结果
+    let finalMessages = assembleMessages(rollingSummary, rawTail);
+
+    // 5. 第三道防线：整体物理保底裁剪 (确保 100% 不超标)
+    if (estimateMessagesTokens(finalMessages) > MAX_HIST) {
+        finalMessages = trimMessagesToTokenBudget(finalMessages, {
+            maxTokens: MAX_HIST,
+            singleMessageMaxTokens: SINGLE_MAX,
+        });
+    }
 
     return {
-        messages: core,
+        messages: finalMessages,
         rolling: { rollingSummary, archivedMessageCount },
     };
 }
 
+
 /**
- * 💡 后台静默维护函数
- * 建议在 AI 回复完后触发，不影响用户主流程
+ * 💡 后台维护函数 (Cache 友好版)
+ * 只有当绝对必要时才在后台更新摘要
  */
 export async function triggerBackgroundMaintenance(
     fullMessages: ChatMessage[],
     rolling: RollingState,
     onUpdate: (next: RollingState) => Promise<void>
 ) {
-    // 后台逻辑可以更激进一点：只要占用超过 70% 就可以提前开始后台摘要
-    const maxMsg = appConfig.chatContextMaxMessages;
-    const rawTail = fullMessages.slice(rolling.archivedMessageCount);
+    const MAX_MSG_COUNT = appConfig.chatContextMaxMessages;
 
-    if (maxMsg > 0 && rawTail.length > maxMsg * 0.7) {
+    const rawTail = fullMessages.slice(rolling.archivedMessageCount);
+    // 提高后台维护的门槛：只有超过 90% 载荷才在后台偷偷合并
+    // 避免频繁的后台更新导致用户下次提问时缓存失效
+    if (MAX_MSG_COUNT > 0 && rawTail.length > MAX_MSG_COUNT * 0.9) {
         try {
-            const batchSize = Math.max(1, appConfig.chatRollingMergeChunk);
-            const batch = rawTail.slice(0, batchSize);
+            // 一次性合并一大块，长痛不如短痛
+            const batchSize = Math.floor(MAX_MSG_COUNT * 0.5);
+            const batch = rawTail.slice(0, batchSize).map(m => ({
+                ...m,
+                content: applyMicroCompression(m.content)
+            }));
+
             const newSummary = await mergeRollingSummary(rolling.rollingSummary, batch);
-            
+
             await onUpdate({
                 rollingSummary: newSummary,
                 archivedMessageCount: rolling.archivedMessageCount + batchSize
             });
         } catch (e) {
-            console.warn("Background summary failed silently.");
+            console.warn("Background summary skipped.");
         }
     }
 }
