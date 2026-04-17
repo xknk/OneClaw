@@ -8,6 +8,7 @@ export interface SessionEntry {
     /** 已从转录开头折入滚动摘要的消息条数（仅模型视图，不删 jsonl） */
     archivedMessageCount?: number;
     rollingSummary?: string;
+    consecutiveFailures?: number; // 连续失败次数
 }
 
 /** sessions.json 内容：sessionKey -> SessionEntry */

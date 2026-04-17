@@ -9,37 +9,90 @@ import type {
 import type { AgentMessage, ChatMessage, ToolSchema } from "../ModelProvider";
 
 /**
- * 构建智谱 API 专用的请求载荷 (Payload)
- * 适配点：智谱不支持 top_k、repeat_penalty，且 num_predict 对应 max_tokens
+ * 【修正】构建智谱 API 专用的请求载荷
  */
 export function buildZhiPuChatRequest(
     messages: ChatMessage[],
     overrides?: Partial<{ stream: boolean; temperature: number; num_predict: number; thinking: { enable: boolean } }>
-): ZhiPuChatRequest { // 此处返回类型改为 any 或 智谱对应的 Request 类型
+): ZhiPuChatRequest {
+    // 💡 关键：在构建 Request 之前，必须先将通用 ChatMessage 转换为智谱专用格式
+    const zhipuMsgs = toZhiPuMessages(messages);
+
     return {
         model: zhipuConfig.modelName,
-        messages,
+        messages: zhipuMsgs, // 现在类型匹配了：ZhiPuRequestMessage[]
         stream: overrides?.stream ?? zhipuConfig.stream,
         temperature: overrides?.temperature ?? zhipuConfig.temperature,
         top_p: zhipuConfig.topP,
         thinking: overrides?.thinking ?? zhipuConfig.thinking,
-        // timeout: zhipuConfig.timeout,
     };
 }
 
 /**
+ * 【修正】协议转换器
+ * 确保每一个分支返回的都是 ZhiPuRequestMessage 的合法子类型
+ */
+export function toZhiPuMessages(messages: AgentMessage[]): ZhiPuRequestMessage[] {
+    return messages.map((m): ZhiPuRequestMessage => {
+
+        // 1. 处理工具角色
+        if (m.role === "tool") {
+            return {
+                role: "tool",
+                content: String(m.content || ""),
+                tool_call_id: String((m as any).tool_call_id || (m as any).id || "call_id"),
+            };
+        }
+
+        // 2. 处理助手角色
+        if (m.role === "assistant") {
+            const res: { role: "assistant"; content: string; tool_calls?: any[] } = {
+                role: "assistant",
+                content: m.content || "",
+            };
+
+            if ("tool_calls" in m && m.tool_calls && m.tool_calls.length > 0) {
+                // 💡 修复点：通过解构或 as any 统一提取 name 和 arguments
+                res.tool_calls = m.tool_calls.map((tc: any) => {
+                    // 兼容业务层结构 (tc.name) 和 协议层结构 (tc.function.name)
+                    const name = tc.name || tc.function?.name || "";
+                    const args = tc.args || tc.function?.arguments || "{}";
+                    
+                    return {
+                        id: tc.id || `call_${Date.now()}`,
+                        type: "function" as const,
+                        function: {
+                            name: name,
+                            arguments: typeof args === "string" ? args : JSON.stringify(args),
+                        },
+                    };
+                });
+            }
+            return res as ZhiPuRequestMessage;
+        }
+
+        // 3. 处理用户和系统角色
+        if (m.role === "system") {
+            return { role: "system", content: m.content };
+        }
+
+        return { role: "user", content: m.content };
+    });
+}
+
+
+/**
  * 基础聊天接口
- * 适配点：修改 URL、注入 Authorization Header、更改取值路径为 choices[0].message
  */
 export async function chatWithZhiPu(messages: ChatMessage[]): Promise<string> {
+    // 自动通过 buildZhiPuChatRequest 调用 toZhiPuMessages 进行转换
     const body = buildZhiPuChatRequest(messages, { stream: false });
-    // 智谱 API 路径
     const url = `${zhipuConfig.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    // 必须传入 API Key，且智谱响应结构在 choices 中
+    
     const data = await postJson<ZhiPuChatResponse>(url, body, {
         timeoutMs: 120_000,
         headers: {
-            "Authorization": `Bearer ${zhipuConfig.apiKey}`, // 从配置中读取 Key
+            "Authorization": `Bearer ${zhipuConfig.apiKey}`,
             "Content-Type": "application/json"
         }
     });
@@ -47,66 +100,11 @@ export async function chatWithZhiPu(messages: ChatMessage[]): Promise<string> {
     if (data?.error) {
         throw new Error(`智谱 API 错误: ${JSON.stringify(data.error)}`);
     }
-    console.log("智谱API返回数据：", data);
-    // 适配点：智谱结果在 choices[0].message.content
     return data?.choices?.[0]?.message?.content ?? "";
 }
 
 /** 
- * 协议转换器
- * 适配点：智谱在处理 tool/assistant 角色时需要 tool_call_id 和具体的 ID 字段
- */
-export function toZhiPuMessages(messages: AgentMessage[]): ZhiPuRequestMessage[] {
-    // 💡 明确标注 map 的返回类型为 ZhiPuRequestMessage
-    return messages.map((m): ZhiPuRequestMessage => {
-
-        // 1. 处理工具结果 (role: "tool")
-        if (m.role === "tool") {
-            return {
-                role: "tool" as const, // 👈 必须加 as const 锁定字面量
-                content: String(m.content || ""),
-                // 确保 ID 存在且为字符串
-                tool_call_id: String((m as any).tool_call_id || (m as any).id || "call_id"),
-            };
-        }
-
-        // 2. 处理助手角色 (role: "assistant")
-        if (m.role === "assistant") {
-            const hasTools = "tool_calls" in m && m.tool_calls?.length;
-
-            // 构造基础助手消息
-            const assistantMsg = {
-                role: "assistant" as const,
-                content: m.content || "",
-            } as any;
-
-            if (hasTools) {
-                assistantMsg.tool_calls = m.tool_calls.map((tc: any, i: number) => ({
-                    id: tc.id || `call_${Date.now()}_${i}`,
-                    type: "function" as const,
-                    function: {
-                        name: tc.name,
-                        // 智谱 API 建议 arguments 传 string 格式
-                        arguments: typeof tc.args === "string" ? tc.args : JSON.stringify(tc.args),
-                    },
-                }));
-            }
-            return assistantMsg;
-        }
-
-        // 3. 处理标准角色 (role: "user" | "system")
-        // 使用类型断言匹配联合类型中的特定分支
-        return {
-            role: m.role as "user" | "system",
-            content: (m as any).content || "",
-        };
-    });
-}
-
-
-/** 
  * 结构转换器
- * 适配点：保持不变，智谱完美兼容此格式
  */
 export function toZhiPuTools(schemas: ToolSchema[]): ZhiPuTool[] {
     return schemas.map((s) => ({
@@ -126,25 +124,19 @@ export async function chatWithZhiPuWithTools(
     messages: AgentMessage[],
     tools: ToolSchema[]
 ): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; id?: string }> }> {
-    const validMessages: AgentMessage[] = messages.filter(m => m.content && m.content.trim() !== "");
-
-    // 现在这一行应该能正常打印了
+    const validMessages = messages.filter(m => m.content && m.content.trim() !== "");
     const url = `${zhipuConfig.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
-    const ZhiPuMessages = toZhiPuMessages(validMessages);
-    const ZhiPuTools = toZhiPuTools(tools);
-
-    // 过滤出基础消息用于构建 body
-    const simpleMessages: ChatMessage[] = ZhiPuMessages
-        .filter((m): m is { role: "system" | "user" | "assistant"; content: string } => m.role !== "tool")
-        .map((m) => ({ role: m.role, content: m.content }));
-
-    const baseBody = buildZhiPuChatRequest(simpleMessages, { stream: false });
+    // 统一使用转换器
+    const zhipuMessages = toZhiPuMessages(validMessages);
+    const zhipuTools = toZhiPuTools(tools);
 
     const body = {
-        ...baseBody,
-        messages: ZhiPuMessages, // 使用转换后的完整消息
-        tools: ZhiPuTools,
+        model: zhipuConfig.modelName,
+        messages: zhipuMessages,
+        tools: zhipuTools,
+        stream: false,
+        temperature: zhipuConfig.temperature,
     };
 
     const data = await postJson<any>(url, body, {
@@ -157,30 +149,17 @@ export async function chatWithZhiPuWithTools(
     if (data?.error) {
         throw new Error(`智谱交互失败: ${JSON.stringify(data.error)}`);
     }
+
     const responseMsg = data?.choices?.[0]?.message;
-    const content = responseMsg?.content ?? "";
     const rawCalls = responseMsg?.tool_calls ?? [];
 
-    const toolCalls = rawCalls.map((tc: any) => {
-        const name = tc.function?.name ?? "";
-        let args = tc.function?.arguments;
+    const toolCalls = rawCalls.map((tc: any) => ({
+        name: tc.function?.name ?? "",
+        args: typeof tc.function?.arguments === "string" 
+            ? JSON.parse(tc.function.arguments) 
+            : tc.function?.arguments ?? {},
+        id: tc.id
+    }));
 
-        // 智谱 API 始终返回字符串，需要 JSON.parse
-        if (typeof args === "string") {
-            try {
-                args = JSON.parse(args) as Record<string, unknown>;
-            } catch {
-                args = {};
-            }
-        }
-
-        if (typeof args !== "object" || args === null) args = {};
-        return {
-            name,
-            args: args as Record<string, unknown>,
-            id: tc.id // 传回 ID，这对于智谱后续的工具结果反馈至关重要
-        };
-    });
-
-    return { content, toolCalls };
+    return { content: responseMsg?.content ?? "", toolCalls };
 }

@@ -8,85 +8,72 @@ import type {
 } from "./types";
 import type { AgentMessage, ChatMessage, ToolSchema } from "../ModelProvider";
 
+/** 
+ * 协议转换器：适配 Ollama 专有协议
+ * 处理点：角色转换、tool_name 注入、参数格式化
+ */
+export function toOllamaMessages(messages: AgentMessage[]): OllamaRequestMessage[] {
+    return messages.map((m): OllamaRequestMessage => {
+        if (m.role === "assistant") {
+            const res: any = { role: "assistant", content: m.content || "" };
+            
+            // 💡 核心：把业务层的扁平结构 (name, args) 翻译成 协议层的嵌套结构 (function: { name, arguments })
+            if ("tool_calls" in m && m.tool_calls?.length) {
+                res.tool_calls = m.tool_calls.map((tc: any) => ({
+                    type: "function",
+                    function: {
+                        // 兼容多种可能的键名
+                        name: tc.name || tc.function?.name,
+                        arguments: tc.args || tc.function?.arguments 
+                    },
+                }));
+            }
+            return res;
+        }
+        // ... 处理 system, user, tool 角色 ...
+        return { role: m.role, content: m.content } as any;
+    });
+}
+
 
 /**
- * 构建 Ollama API 专用的请求载荷 (Payload)
- * 作用：将全局环境变量中的模型超参数（Temperature, Top_P 等）与当前消息流合并。
- * @param messages 经过格式化后的消息列表
- * @param overrides 允许在调用处临时覆盖配置（例如：对话时需要随机度，但执行任务时需要确定性）
+ * 构建 Ollama 请求载荷
  */
 export function buildOllamaChatRequest(
-    messages: ChatMessage[],
+    messages: AgentMessage[],
     overrides?: Partial<{ stream: boolean; temperature: number; num_predict: number }>
 ): OllamaChatRequest {
     return {
-        model: ollamaConfig.modelName, // 对应 ollama list 中的模型名
-        messages,
-        // 逻辑回退：优先用参数 -> 其次用配置 -> 最后隐含 API 默认值
+        model: ollamaConfig.modelName,
+        messages: toOllamaMessages(messages),
         stream: overrides?.stream ?? ollamaConfig.stream,
-        temperature: overrides?.temperature ?? ollamaConfig.temperature,
-        top_p: ollamaConfig.topP,
-        top_k: ollamaConfig.topK,
-        repeat_penalty: ollamaConfig.repeatPenalty,
-        num_predict: overrides?.num_predict ?? ollamaConfig.numPredict, // 限制模型最大生成的 Token 数
-    };
+        options: {
+            temperature: overrides?.temperature ?? ollamaConfig.temperature,
+            top_p: ollamaConfig.topP,
+            top_k: ollamaConfig.topK,
+            num_predict: overrides?.num_predict ?? ollamaConfig.numPredict,
+        }
+    } as OllamaChatRequest;
 }
 
 /**
- * 基础聊天接口（无工具支持）
- * 场景：用于简单的问答，不触发任何外部函数调用。
+ * 基础对话接口
+ * 修正：参数类型改为 AgentMessage[] 或 any[]，以兼容业务层的复杂消息结构
  */
-export async function chatWithOllama(messages: ChatMessage[]): Promise<string> {
-    const body = buildOllamaChatRequest(messages, { stream: false });
-    // 兼容性处理：防止 baseUrl 末尾带斜杠导致拼接出 //api/chat 的双斜杠错误
-    const url = `${ollamaConfig.baseUrl.replace(/\/$/, "")}/api/chat`;
+export async function chatWithOllama(messages: AgentMessage[] | ChatMessage[]): Promise<string> {
+    // 强制转换为合法的 Ollama 协议格式
+    const ollamaMsgs = toOllamaMessages(messages as AgentMessage[]);
     
-    // 发送 POST 请求，超时设为 120s 是因为本地显存加载模型或推理长文本时可能响应较慢
+    const body = buildOllamaChatRequest(ollamaMsgs as any, { stream: false });
+    const url = `${ollamaConfig.baseUrl.replace(/\/$/, "")}/api/chat`;
     const data = await postJson<OllamaChatResponse>(url, body, { timeoutMs: 120_000 });
     
-    if (data?.error) {
-        throw new Error(`Ollama 内部错误: ${data.error}`);
-    }
-    // Ollama 的非流式响应中，内容位于 message.content
+    if (data?.error) throw new Error(`Ollama 错误: ${data.error}`);
     return data?.message?.content ?? "";
 }
 
 /** 
- * 协议转换器：将通用 AgentMessage 转换为 Ollama 要求的消息协议
- * 核心逻辑：
- * 1. 处理 'tool' 角色：将工具执行后的结果反馈给模型。
- * 2. 处理 'assistant' 的工具调用：将模型之前的思考（tool_calls）写回上下文，否则模型会“忘记”它刚才叫你干什么。
- */
-export function toOllamaMessages(messages: AgentMessage[]): OllamaRequestMessage[] {
-    return messages.map((m) => {
-        // 情况 A: 这一条是工具返回的结果
-        if (m.role === "tool" && "tool_name" in m) {
-            return { role: "tool", tool_name: m.tool_name, content: m.content };
-        }
-        // 情况 B: 这一条是模型发出的调用指令
-        if (m.role === "assistant" && "tool_calls" in m && m.tool_calls?.length) {
-            return {
-                role: "assistant",
-                content: m.content,
-                // Ollama 要求的 tool_calls 格式：必须包含 type: 'function' 和嵌套的 function 对象
-                tool_calls: m.tool_calls.map((tc, i) => ({
-                    type: "function" as const,
-                    function: { 
-                        index: i, // 某些本地模型依赖索引来匹配响应
-                        name: tc.name, 
-                        arguments: tc.args 
-                    },
-                })),
-            };
-        }
-        // 情况 C: 标准的角色消息 (user/system/assistant 无工具)
-        return { role: m.role, content: (m as { content: string }).content };
-    });
-}
-
-/** 
- * 结构转换器：将内部 ToolSchema (定义) 转换为 Ollama API 识别的 tools 声明
- * 作用：让模型知道有哪些“技能”可以使用，以及参数的 JSON Schema 约束。
+ * 工具定义转换器
  */
 export function toOllamaTools(schemas: ToolSchema[]): OllamaTool[] {
     return schemas.map((s) => ({
@@ -94,38 +81,28 @@ export function toOllamaTools(schemas: ToolSchema[]): OllamaTool[] {
         function: {
             name: s.name,
             description: s.description,
-            // 必须符合 JSON Schema 规范，若未定义参数则默认为空对象
             parameters: s.parameters ?? { type: "object", properties: {} },
         },
     }));
 }
 
 /**
- * 高级接口：带工具调用的 Ollama 交互
- * 实现细节：
- * 1. 同时发送历史消息 (messages) 和可用工具列表 (tools)。
- * 2. 解析模型返回的 content（它的思考过程）和 tool_calls（它的行动计划）。
+ * 【恢复】高级接口：带工具调用的 Ollama 交互
+ * 包含健壮性参数解析逻辑
  */
 export async function chatWithOllamaWithTools(
     messages: AgentMessage[],
     tools: ToolSchema[]
-): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown> }> }> {
+): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; id?: string }> }> {
     const url = `${ollamaConfig.baseUrl.replace(/\/$/, "")}/api/chat`;
     
-    // 1. 转换消息格式以包含之前的工具交互历史
+    // 调用转换器将 AgentMessage 转化为 OllamaRequestMessage
     const ollamaMessages = toOllamaMessages(messages);
-    // 2. 转换工具声明，告诉模型你可以调用什么
     const ollamaTools = toOllamaTools(tools);
     
-    // 3. 构建临时消息快照用于基础参数初始化
-    const simpleMessages: ChatMessage[] = ollamaMessages
-        .filter((m): m is { role: "system" | "user" | "assistant"; content: string } => m.role !== "tool")
-        .map((m) => ({ role: m.role, content: m.content }));
-    
-    const baseBody = buildOllamaChatRequest(simpleMessages, { stream: false });
-    
-    // 4. 组合最终请求体，明确要求模型进行工具检测
-    const body: OllamaChatRequest = {
+    // 2. 构建请求体 (复用配置参数)
+    const baseBody = buildOllamaChatRequest(messages, { stream: false });
+    const body = {
         ...baseBody,
         messages: ollamaMessages,
         tools: ollamaTools,
@@ -134,34 +111,32 @@ export async function chatWithOllamaWithTools(
     const data = await postJson<OllamaChatResponse>(url, body, { timeoutMs: 120_000 });
     
     if (data?.error) {
-        throw new Error(`Ollama 交互失败: ${data.error}`);
+        throw new Error(`Ollama 工具交互失败: ${data.error}`);
     }
 
-    const content = data?.message?.content ?? "";
-    const rawCalls = data?.message?.tool_calls ?? [];
+    const message = data?.message;
+    const content = message?.content ?? "";
+    const rawCalls = message?.tool_calls ?? [];
 
-    /**
-     * 5. 健壮性解析 (Robust Parsing)：
-     * 重点：本地模型（如 Llama3/Qwen2）在返回工具参数时，
-     * 有时会错误地返回 JSON 字符串而非 JSON 对象。此处做了强制兼容。
-     */
-    const toolCalls = rawCalls.map((tc) => {
+    // 3. 健壮性解析：处理模型可能返回的字符串格式参数
+    const toolCalls = rawCalls.map((tc: any) => {
         const name = tc.function?.name ?? "";
-        let args = tc.function?.arguments;
+        let args = tc.function?.arguments ?? {};
         
-        // 如果模型“偷懒”返回了字符串，尝试手动解析
         if (typeof args === "string") {
             try {
-                args = JSON.parse(args) as Record<string, unknown>;
+                args = JSON.parse(args);
             } catch {
-                console.warn(`无法解析模型生成的参数字符串: ${args}`);
+                console.warn(`[Ollama] 无法解析参数字符串: ${args}`);
                 args = {};
             }
         }
         
-        // 兜底：确保 args 最终一定是个对象，防止上层 Agent 崩溃
-        if (typeof args !== "object" || args === null) args = {};
-        return { name, args: args as Record<string, unknown> };
+        return { 
+            name, 
+            args: args as Record<string, unknown>,
+            id: tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 5)}` // 确保生成 ID 供后续逻辑追溯
+        };
     });
 
     return { content, toolCalls };

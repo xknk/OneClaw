@@ -1,8 +1,22 @@
-export type ChatMessage = {
-    role: "system" | "user" | "assistant";
-    content: string;
-};
+export type ChatMessage =
 
+    | { role: "system"; content: string; tool_calls?: never }
+    | { role: "user"; content: string; tool_calls?: never }
+    | {
+        role: "assistant";
+        content: string;
+        // 允许 assistant 携带工具调用指令
+        tool_calls?: {
+            id: string;
+            type: "function";
+            function: { name: string; arguments: string };
+        }[];
+    }
+    | {
+        role: "tool";
+        content: string;
+        tool_call_id?: string; // 某些厂商（如智谱、OpenAI）需要这个 ID
+    };
 /** 与具体 API 无关的工具描述，供各 Provider 转成自家格式 */
 export type ToolSchema = {
     name: string;
