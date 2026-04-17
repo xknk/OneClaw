@@ -86,11 +86,12 @@ export interface Skill {
     config?: Record<string, any>;
     /** 触发/启用该技能的具体条件 */
     enableWhen?: SkillEnableWhen;
-     /**
-     * key = tool name
-     * value = 该工具的执行实现
-     */
-     toolImpls?: Record<string, SkillToolImpl>;
+    /**
+    * key = tool name
+    * value = 该工具的执行实现
+    */
+    toolImpls?: Record<string, SkillToolImpl>;
+    readonly?: boolean; // 标记是否为只读/无副作用-为true时可并行执行工具
 }
 
 /**

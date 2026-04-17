@@ -102,44 +102,56 @@ export interface RunAgentOptions {
  * @param messages 初始对话历史
  * @param options 控制参数（工具 schema、executeTool、guard 等）
  */
+/** 允许并行的工具白名单：无副作用且无相互依赖的只读操作 */
+const PARALLEL_TOOL_WHITELIST = new Set([
+    "get_time",
+    "echo",
+    "json_validate",
+    "fetch_url",
+    "list_directory",
+    "read_file",
+    "search_files"
+]);
+
 export async function runAgent(
     messages: ChatMessage[],
     options?: RunAgentOptions
 ): Promise<string> {
     const maxRounds = options?.maxToolRounds ?? MAX_TOOL_ROUNDS;
-    const toolSchemas = options?.toolSchemas ?? getToolSchemas();
+    let toolSchemas = options?.toolSchemas ?? getToolSchemas();
 
-    // 拷贝并维护一份 Agent 内部的消息列表，用于在循环中不断追加上下文
     const agentMessages: AgentMessage[] = [...messages];
     let round = 0;
     let lastContent = "";
-    // --- ReAct 核心循环开始 ---
+    
+    // --- 策略降级控制变量 ---
+    // let attemptWithFallback = true;
+    // let useStrictMode = true; 
+
     while (round < maxRounds) {
         round++;
 
-        // 1. 记录模型生命周期事件，开始请求大模型
         await options?.onModelEvent?.({
             type: "llm.request",
             round,
             contentLength: agentMessages.length,
         });
 
-        // 调用模型获取响应：包含 content (回复文本) 和 toolCalls (工具调用请求)
+        // 1. 调用模型（带降级逻辑尝试）
         let content: string;
         let toolCalls: ChatWithToolsResult["toolCalls"];
+        
         try {
             const r = await chatWithModelWithTools(agentMessages, toolSchemas);
             content = r.content;
             toolCalls = r.toolCalls;
         } catch (err) {
+            // 这里可以触发模型切换或 Prompt 简化的降级逻辑
             const msg = err instanceof Error ? err.message : String(err);
-            await options?.onModelEvent?.({
-                type: "llm.error",
-                round,
-                error: msg,
-            });
+            await options?.onModelEvent?.({ type: "llm.error", round, error: msg });
             return `模型请求失败：${msg}`;
         }
+        
         lastContent = content;
 
         await options?.onModelEvent?.({
@@ -149,52 +161,73 @@ export async function runAgent(
             contentLength: content?.length ?? 0,
         });
 
-        // 【出口】：如果模型不再需要调用任何工具，认为任务已完成，直接返回内容
-        if (toolCalls.length === 0) {
-            return content || lastContent;
-        }
+        if (toolCalls.length === 0) return content || lastContent;
 
-        // 2. 准备执行工具：先将模型生成的回复和调用请求记录到上下文中
+        // 2. 记录助手意图
         agentMessages.push({
             role: "assistant",
             content,
             tool_calls: toolCalls.map((tc) => ({ id: tc.id ?? "", name: tc.name, args: tc.args })),
         });
 
-        // 3. 执行行动 (Acting)：并行或串行处理模型请求的所有工具
-        for (const call of toolCalls) {
-            const startedAt = Date.now();
-            
-            // 执行具体工具
-            const result = await executeSingleTool(call.name, call.args, {
-                executeTool: options?.executeTool,
-                toolGuard: options?.toolGuard,
-            });
+        // 3. 决定执行策略：检查是否本轮所有工具都在并行白名单内
+        const canParallel = toolCalls.length > 1 && toolCalls.every(call => PARALLEL_TOOL_WHITELIST.has(call.name));
 
-            const durationMs = Date.now() - startedAt;
-
-            // 触发工具调用结束回调
-            options?.onToolCallFinished?.({
-                toolName: call.name,
-                args: call.args,
-                result,
-                ok: !isToolFailureResultString(result),
-                durationMs,
-            });
-
-            // 4. 反馈 (Observation)：将工具返回的结果推入消息流
-            // LLM 在下一轮循环中会基于此结果进行后续推理
-            agentMessages.push({
-                role: "tool",
-                tool_name: call.name,
-                content: result,
-            });
+        if (canParallel) {
+            // --- 并行执行模式 ---
+            const results = await Promise.all(
+                toolCalls.map(call => executeAndRecordTool(call, options))
+            );
+            agentMessages.push(...results);
+        } else {
+            // --- 串行执行模式 (含敏感操作如 apply_patch, exec) ---
+            for (const call of toolCalls) {
+                const result = await executeAndRecordTool(call, options);
+                agentMessages.push(result);
+            }
         }
     }
 
-    // 若达到最大轮数仍未给出最终结果，返回最后一次生成的内容
     return lastContent;
 }
+
+/**
+ * 辅助函数：执行单个工具并记录事件，封装成标准的 AgentMessage 格式
+ */
+async function executeAndRecordTool(
+    call: ChatWithToolsResult["toolCalls"][0],
+    options?: RunAgentOptions
+): Promise<AgentMessage> {
+    const startedAt = Date.now();
+    let result: string;
+
+    try {
+        result = await executeSingleTool(call.name, call.args, {
+            executeTool: options?.executeTool,
+            toolGuard: options?.toolGuard,
+        });
+    } catch (err) {
+        result = `工具执行错误: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    const durationMs = Date.now() - startedAt;
+
+    options?.onToolCallFinished?.({
+        toolName: call.name,
+        args: call.args,
+        result,
+        ok: !isToolFailureResultString(result),
+        durationMs,
+    });
+
+    return {
+        role: "tool",
+        tool_name: call.name,
+        content: result,
+        tool_call_id: call.id, // 确保 ID 传递正确
+    };
+}
+
 
 /**
  * executeSingleTool: 执行单个工具的封装函数
