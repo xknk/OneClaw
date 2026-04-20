@@ -3,7 +3,7 @@
  */
 
 import type { ChatMessage } from "../llm/providers/ModelProvider";
-import { chatWithModel } from "../llm/model";
+import { chatWithModel, resolveRollingSummaryModelKey } from "../llm/model";
 import { appConfig } from "@/config/evn";
 
 function summarizeSystemPrompt(): string {
@@ -23,15 +23,19 @@ function summarizeUserPrompt(text: string): string {
 /**
  * 把 messages 交给 LLM 总结成一段文字
  */
-export async function summarizeMessages(messages: ChatMessage[]): Promise<string> {
+export async function summarizeMessages(messages: ChatMessage[], modelKey?: string): Promise<string> {
     if (messages.length === 0) return "";
     const text = messages
         .map((m) => `[${m.role}]: ${m.content}`)
         .join("\n\n");
-    const summary = await chatWithModel([
-        { role: "system", content: summarizeSystemPrompt() },
-        { role: "user", content: summarizeUserPrompt(text) },
-    ]);
+    const key = modelKey ?? resolveRollingSummaryModelKey();
+    const summary = await chatWithModel(
+        [
+            { role: "system", content: summarizeSystemPrompt() },
+            { role: "user", content: summarizeUserPrompt(text) },
+        ],
+        key,
+    );
     return summary.trim();
 }
 
@@ -53,12 +57,17 @@ function mergeUserPrompt(prev: string, batch: ChatMessage[]): string {
 /** 将新消息折入滚动摘要（增量） */
 export async function mergeRollingSummary(
     previousSummary: string,
-    newMessages: ChatMessage[]
+    newMessages: ChatMessage[],
+    modelKey?: string,
 ): Promise<string> {
     if (newMessages.length === 0) return previousSummary.trim();
-    const summary = await chatWithModel([
-        { role: "system", content: mergeSystemPrompt() },
-        { role: "user", content: mergeUserPrompt(previousSummary, newMessages) },
-    ]);
+    const key = modelKey ?? resolveRollingSummaryModelKey();
+    const summary = await chatWithModel(
+        [
+            { role: "system", content: mergeSystemPrompt() },
+            { role: "user", content: mergeUserPrompt(previousSummary, newMessages) },
+        ],
+        key,
+    );
     return summary.trim();
 }

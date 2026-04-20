@@ -14,6 +14,12 @@ html {
     -webkit-tap-highlight-color: transparent;
 }
 
+html,
+body,
+#root {
+    height: 100%;
+}
+
 body {
     @apply min-h-dvh font-sans antialiased transition-colors duration-300;
     @apply bg-slate-100 text-slate-900;

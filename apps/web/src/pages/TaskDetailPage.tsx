@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
     apiGetTask,
+    apiTaskUpdate,
     apiTaskApprove,
     apiTaskCancel,
     apiTaskNote,
@@ -93,6 +94,19 @@ const ALL_STATUS: TaskStatus[] = [
     "cancelled",
 ];
 
+const ALLOWED_NEXT: Record<TaskStatus, TaskStatus[]> = {
+    draft: ["planned", "cancelled"],
+    planned: ["running", "cancelled"],
+    running: ["review", "pending_approval", "failed", "cancelled"],
+    pending_approval: ["running", "cancelled"],
+    review: ["approved", "rejected", "failed", "cancelled"],
+    approved: ["done", "cancelled"],
+    rejected: ["running", "planned", "cancelled"],
+    done: [],
+    failed: ["running", "planned", "cancelled"],
+    cancelled: [],
+};
+
 export function TaskDetailPage() {
     const { locale, t } = useLocale();
     const { taskId: rawId } = useParams();
@@ -126,6 +140,7 @@ export function TaskDetailPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [msg, setMsg] = useState<string | null>(null);
+    const [titleDraft, setTitleDraft] = useState("");
 
     const [transTo, setTransTo] = useState<TaskStatus>("running");
     const [transReason, setTransReason] = useState("");
@@ -148,6 +163,7 @@ export function TaskDetailPage() {
         try {
             const rec = await apiGetTask(taskId);
             setTask(rec);
+            setTitleDraft(rec.title);
         } catch (e) {
             setError(e instanceof Error ? e.message : t("task.loadFail"));
             setTask(null);
@@ -186,6 +202,10 @@ export function TaskDetailPage() {
         () => (task ? orchestrationMetaFromTask(task) : null),
         [task],
     );
+    const allowedTransitions = useMemo<TaskStatus[]>(
+        () => (task ? (ALLOWED_NEXT[task.status] ?? []) : []),
+        [task],
+    );
 
     /** 有计划步骤时，保证 step 下拉与当前索引一致 */
     useEffect(() => {
@@ -200,6 +220,19 @@ export function TaskDetailPage() {
         setRunTraceChoice("");
         setRunTraceCustom("");
     }, [taskId]);
+
+    /** 任务或其状态变化时，确保目标状态是合法可选项 */
+    useEffect(() => {
+        if (!task) return;
+        const allowed = ALLOWED_NEXT[task.status] ?? [];
+        if (allowed.length === 0) {
+            // 终态：不允许迁移；保持 UI 选择但禁用提交
+            return;
+        }
+        if (!allowed.includes(transTo)) {
+            setTransTo(allowed[0]);
+        }
+    }, [task, transTo]);
 
     const flash = (m: string) => {
         setMsg(m);
@@ -252,7 +285,9 @@ export function TaskDetailPage() {
             <Card className="p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                        <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{task.title}</h2>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{task.title}</h2>
+                        </div>
                         <p className="font-mono text-xs text-slate-500">{task.taskId}</p>
                         <p className="mt-1 text-xs text-slate-500">
                             {t("task.created")} {formatDateTime(task.createdAt, locale)} · {t("task.updated")}{" "}
@@ -260,6 +295,32 @@ export function TaskDetailPage() {
                         </p>
                     </div>
                     <StatusBadge status={task.status} label={t(`taskStatus.${task.status}`)} />
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+                    <label className="block text-xs text-slate-500">
+                        标题
+                        <Input
+                            className="mt-1"
+                            value={titleDraft}
+                            onChange={(e) => setTitleDraft(e.target.value)}
+                            placeholder={task.title}
+                        />
+                    </label>
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        className="sm:mb-0"
+                        disabled={!titleDraft.trim() || titleDraft.trim() === task.title}
+                        onClick={() =>
+                            void run(async () => {
+                                const r = await apiTaskUpdate(task.taskId, { title: titleDraft });
+                                setTask(r);
+                                setTitleDraft(r.title);
+                            })
+                        }
+                    >
+                        保存标题
+                    </Button>
                 </div>
                 {task.failureReason && (
                     <p className="mt-2 text-sm text-rose-300">
@@ -336,6 +397,11 @@ export function TaskDetailPage() {
             <Card className="p-4">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.transition")}</h3>
                 <p className="text-xs text-slate-500">{t("task.transitionHint")}</p>
+                {allowedTransitions.length === 0 && (
+                    <p className="mt-2 rounded-lg border border-amber-900/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-100/90">
+                        当前状态为「{t(`taskStatus.${task.status}`)}」，不允许再迁移状态。
+                    </p>
+                )}
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <label className="block text-xs text-slate-400">
                         {t("task.targetStatus")}
@@ -343,12 +409,16 @@ export function TaskDetailPage() {
                             className="mt-1"
                             value={transTo}
                             onChange={(e) => setTransTo(e.target.value as TaskStatus)}
+                            disabled={allowedTransitions.length === 0}
                         >
-                            {ALL_STATUS.map((s) => (
-                                <option key={s} value={s}>
-                                    {t(`taskStatus.${s}`)}
-                                </option>
-                            ))}
+                            {ALL_STATUS.map((s) => {
+                                const ok = allowedTransitions.includes(s);
+                                return (
+                                    <option key={s} value={s} disabled={!ok}>
+                                        {t(`taskStatus.${s}`)}
+                                    </option>
+                                );
+                            })}
                         </Select>
                     </label>
                     <label className="block text-xs text-slate-400 sm:col-span-2">
@@ -358,12 +428,14 @@ export function TaskDetailPage() {
                             value={transReason}
                             onChange={(e) => setTransReason(e.target.value)}
                             rows={2}
+                            disabled={allowedTransitions.length === 0}
                         />
                     </label>
                 </div>
                 <Button
                     type="button"
                     className="mt-3"
+                    disabled={allowedTransitions.length === 0}
                     onClick={() =>
                         void run(async () => {
                             const r = await apiTaskTransition(task.taskId, {
@@ -476,6 +548,11 @@ export function TaskDetailPage() {
             <Card className="p-4">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("task.resume")}</h3>
                 <p className="text-xs text-slate-500">{t("task.resumeHint")}</p>
+                {task.status !== "failed" && (
+                    <p className="mt-2 rounded-lg border border-amber-900/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-100/90">
+                        仅「{t("taskStatus.failed")}」状态可恢复；当前状态为「{t(`taskStatus.${task.status}`)}」。
+                    </p>
+                )}
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     {planStepOpts.length > 0 ? (
                         <label className="block text-xs text-slate-400">
@@ -524,6 +601,7 @@ export function TaskDetailPage() {
                 <Button
                     type="button"
                     className="mt-3"
+                    disabled={task.status !== "failed"}
                     onClick={() =>
                         void run(async () => {
                             let payload: Record<string, unknown> | undefined;

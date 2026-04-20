@@ -11,6 +11,7 @@ import {
     resumeFromCheckpoint,
     retryTask,
     transitionTask,
+    updateTaskTitle,
 } from "@/tasks/taskService";
 import type { TransitionTaskInput } from "@/tasks/types";
 import {
@@ -95,6 +96,26 @@ export function registerTaskRoutes(app: express.Application): void {
         }
     });
     /**
+     * 更新任务标题（允许在 UI 中修改）
+     */
+    app.patch("/api/tasks/:taskId", async (req, res) => {
+        try {
+            const body = req.body ?? {};
+            const title = typeof body.title === "string" ? body.title : "";
+            if (!title.trim()) {
+                res.status(400).json({ error: "body.title 必填" });
+                return;
+            }
+            const rec = await updateTaskTitle(req.params.taskId, title);
+            res.json(rec);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : "服务器内部错误";
+            const code = msg.includes("不存在") ? 404 : msg.includes("不能为空") || msg.includes("必填") ? 400 : 500;
+            if (code === 500) console.error("/api/tasks PATCH:", redactForLog(err));
+            res.status(code).json({ error: msg });
+        }
+    });
+    /**
      * 永久删除任务记录（管理端 / 清理）
      */
     app.delete("/api/tasks/:taskId", async (req, res) => {
@@ -156,7 +177,12 @@ export function registerTaskRoutes(app: express.Application): void {
             res.json(rec);
         } catch (err) {
             const msg = err instanceof Error ? err.message : "服务器内部错误";
-            const code = msg.includes("不存在") ? 404 : msg.includes("不允许") ? 400 : 500;
+            const code =
+                msg.includes("不存在")
+                    ? 404
+                    : msg.includes("不允许") || msg.includes("终态") || msg.includes("不可迁移")
+                      ? 400
+                      : 500;
             if (code === 500) console.error("/api/tasks transition:", redactForLog(err));
             res.status(code).json({ error: msg });
         }

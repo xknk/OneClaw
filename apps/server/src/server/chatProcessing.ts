@@ -2,7 +2,7 @@ import crypto from "node:crypto"
 import { runAgent } from "@/agent/runAgent";
 import { UnifiedInboundMessage, UnifiedOutboundMessage } from "@/channels/unifiedMessage";
 import { appConfig } from "@/config/evn";
-import { ChatMessage } from "@/llm/model";
+import { ChatMessage, resolveRollingSummaryModelKey } from "@/llm/model";
 import { buildMessagesForModel, triggerBackgroundMaintenance } from "@/session/buildModelContext";
 import {
     getOrCreateSessionId,
@@ -15,6 +15,7 @@ import {
     scheduleRollingPrefetchAfterAssistant,
 } from "@/session/rollingPrefetch";
 import { appendMessage, readMessages } from "@/session/transcript";
+import { getChatRiskPendingApproval } from "@/session/riskApprovalSession";
 import { SessionKey } from "@/session/type";
 import { loadSkillsForContext } from "@/skills/loadSkills";
 import { evaluateToolPermission, resolveProfileId } from "@/security/policy";
@@ -46,7 +47,7 @@ import {
 import { formatTaskContextForModel } from "@/tasks/taskContextPrompt";
 import { interceptHighRiskToolForTask } from "@/tasks/taskApproval";
 import { ToolPolicyGuard, ToolPolicyError } from "@/tasks/stepToolPolicy";
-import type { PlanStep } from "@/tasks/collaborationTypes";
+import { META_PENDING_APPROVAL_KEY, type PlanStep } from "@/tasks/collaborationTypes";
 import {
     getRunningPlanStepFromRecord,
     updateTaskOrchestrationSnapshot,
@@ -220,6 +221,9 @@ export async function handleUnifiedChat(
 
     // --- 3. 记忆与上下文管理 ---
 
+    const summaryModelKey = resolveRollingSummaryModelKey(inbound.modelId);
+    const rollingOpts = { summaryModelKey };
+
     await awaitRollingPrefetchIdle(sessionKey, agentId);
     // 获取会话ID
     const sessionId = await getOrCreateSessionId(sessionKey, agentId);
@@ -232,7 +236,7 @@ export async function handleUnifiedChat(
     // 获取摘要信息和归档消息数量
     const rollingIn = await getRollingState(sessionKey, agentId);
 
-    const built = await buildMessagesForModel(fullMessages, rollingIn); // 构建完整消息
+    const built = await buildMessagesForModel(fullMessages, rollingIn, rollingOpts); // 构建完整消息
 
     let messages = built.messages;
     await setRollingState(sessionKey, agentId, built.rolling);
@@ -373,6 +377,8 @@ export async function handleUnifiedChat(
                     args,
                     traceId,
                     riskLevel: resolved?.definition.riskLevel,
+                    sessionKey,
+                    agentId,
                 });
                 if (blocked) return blocked;
                 return execService.execute(toolName, args);
@@ -389,16 +395,34 @@ export async function handleUnifiedChat(
         await touchSession(sessionKey, agentId); // 更新活跃时间
         scheduleRollingPrefetchAfterAssistant(sessionKey, agentId, sessionId);
 
-        // 将结果发回前端
+        const outboundMeta: Record<string, unknown> = {
+            traceId,
+            agentId,
+            profileId,
+            taskId,
+            decisionSource,
+        };
+        if (taskId?.trim()) {
+            const tr = await getTask(taskId.trim());
+            if (tr) {
+                outboundMeta.taskStatus = tr.status;
+                if (tr.status === "pending_approval") {
+                    const p = tr.meta?.[META_PENDING_APPROVAL_KEY];
+                    if (p && typeof p === "object" && !Array.isArray(p)) {
+                        outboundMeta.pendingTaskApproval = p;
+                    }
+                }
+            }
+        }
+        const sessionRisk = await getChatRiskPendingApproval(sessionKey, agentId);
+        if (sessionRisk) {
+            outboundMeta.pendingSessionRiskApproval = sessionRisk;
+        }
+
+        // 将结果发回前端（含任务/会话审批提示，供聊天页弹窗）
         await sendOutbound({
             text: replyText,
-            metadata: {
-                traceId,
-                agentId,
-                profileId,
-                taskId,
-                decisionSource,
-            },
+            metadata: outboundMeta,
         });
         // 再次获取历史信息
         const storeHistory = await readMessages(sessionId, agentId);
@@ -417,7 +441,8 @@ export async function handleUnifiedChat(
         await triggerBackgroundMaintenance(
             storeHistory,
             storeRollingIn,
-            async (next) => await setRollingState(sessionKey, agentId, next)
+            async (next) => await setRollingState(sessionKey, agentId, next),
+            rollingOpts,
         );
         await emitTrace(traceBase, "session.end", {
             ok: true,

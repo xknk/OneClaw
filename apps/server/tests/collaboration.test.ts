@@ -58,4 +58,39 @@ describe("V4 collaboration (plan + review)", () => {
         });
         expect(t.status).toBe("rejected");
     });
+
+    it("prepareTaskForChatRound repairs running task when plan has no running step (done-only desync)", async () => {
+        const { createTask, transitionTask, prepareTaskForChatRound } = await import("@/tasks/taskService");
+        const { getTaskPlanFromRecord, getRunningPlanStepFromRecord } = await import(
+            "@/tasks/collaborationService"
+        );
+        const { readTask, writeTask } = await import("@/tasks/taskStore");
+        const { META_PLAN_KEY } = await import("@/tasks/collaborationTypes");
+
+        const t0 = await createTask({ templateId: "fix_bug" });
+        await transitionTask(t0.taskId, { to: "planned" });
+        await transitionTask(t0.taskId, { to: "running" });
+
+        const cur = await readTask(t0.taskId);
+        expect(cur).toBeTruthy();
+        const plan = getTaskPlanFromRecord(cur!);
+        expect(plan?.steps.length).toBeGreaterThan(0);
+        const broken = {
+            ...plan!,
+            steps: plan!.steps.map((s, i) => (i === 0 ? { ...s, status: "done" as const } : s)),
+        };
+        await writeTask({
+            ...cur!,
+            meta: { ...(cur!.meta ?? {}), [META_PLAN_KEY]: broken },
+        });
+
+        const mid = await readTask(t0.taskId);
+        expect(getRunningPlanStepFromRecord(mid!)).toBeNull();
+
+        const prep = await prepareTaskForChatRound(t0.taskId);
+        expect(prep.record?.status).toBe("running");
+        const running = getRunningPlanStepFromRecord(prep.record!);
+        expect(running).not.toBeNull();
+        expect(running?.status).toBe("running");
+    });
 });

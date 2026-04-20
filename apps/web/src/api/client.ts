@@ -74,6 +74,12 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
     return JSON.parse(text) as T;
 }
 
+export type ChatResponse = {
+    reply: string;
+    /** 服务端返回：taskStatus、待审批快照、无任务时会话级挂起等 */
+    metadata?: Record<string, unknown>;
+};
+
 export async function apiChat(body: {
     message: string;
     sessionKey?: string;
@@ -83,8 +89,19 @@ export async function apiChat(body: {
     taskId?: string;
     /** 与任务联用时：为 true 则优先使用下方 agentId，不被计划步 assignedAgentId 覆盖 */
     agentLocked?: boolean;
-}): Promise<{ reply: string }> {
-    return apiJson<{ reply: string }>("/api/chat", {
+}): Promise<ChatResponse> {
+    return apiJson<ChatResponse>("/api/chat", {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
+}
+
+/** 无 taskId 时高风险工具：在聊天页确认后调用，放行下一次同工具调用 */
+export async function apiChatApproveRisk(body: { sessionKey: string; agentId?: string }): Promise<{
+    ok: boolean;
+    toolName: string;
+}> {
+    return apiJson<{ ok: boolean; toolName: string }>("/api/chat/approve-risk", {
         method: "POST",
         body: JSON.stringify(body),
     });
@@ -383,6 +400,13 @@ export async function apiDeleteTask(taskId: string): Promise<void> {
     }
     const text = await res.text();
     throw new Error(await parseError(res, text));
+}
+
+export async function apiTaskUpdate(taskId: string, body: { title?: string }): Promise<TaskRecord> {
+    return apiJson<TaskRecord>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+    });
 }
 
 export async function apiTaskPlan(

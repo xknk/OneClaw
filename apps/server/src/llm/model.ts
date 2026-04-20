@@ -11,9 +11,26 @@ import type {
 } from "./providers/ModelProvider";
 import { OllamaProvider } from "./providers/ollama/OllamaProvider";
 import { ZhiPuProvider } from "./providers/zhipu/ZhiPuProvider";
-import { resolveModelRuntime } from "./modelCatalog";
+import { loadModelsCatalog, resolveModelRuntime } from "./modelCatalog";
 
 export type { ChatMessage, AgentMessage, ToolSchema, ChatWithToolsResult };
+
+/**
+ * 滚动摘要 / 合并摘要使用的模型 id（与 models.json 的 id 对齐）。
+ * 优先级：ONECLAW_ROLLING_SUMMARY_MODEL_ID → 本轮对话模型 → models.json 的 defaultModelId → ollama。
+ * 避免对话选 Ollama 时摘要仍默认走智谱导致长时间卡住或失败。
+ */
+export function resolveRollingSummaryModelKey(preferredFromChat?: string | null): string {
+    const fromEnv = process.env.ONECLAW_ROLLING_SUMMARY_MODEL_ID?.trim();
+    if (fromEnv) return fromEnv;
+    const fromChat = preferredFromChat?.trim();
+    if (fromChat) return fromChat;
+    try {
+        return loadModelsCatalog().defaultModelId;
+    } catch {
+        return "ollama";
+    }
+}
 
 function getProviderByKey(modelKey: string): ModelProvider {
     const key = (modelKey || "").trim();

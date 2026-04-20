@@ -58,4 +58,21 @@ describe("taskRunner", () => {
 
         await expect(runTaskPlan(task.taskId)).rejects.toThrow("多个 running");
     });
+
+    it("无 executeStep 时不空转完成步骤：保持当前步 running，供 WebChat 调工具", async () => {
+        const task = await createTask({ title: "runner-defer" });
+        await setTaskPlan(task.taskId, {
+            steps: [
+                { index: 0, title: "s0", intent: "i0", allowedTools: ["read_file", "apply_patch"], status: "pending" },
+            ],
+        });
+        await transitionTask(task.taskId, { to: "planned" });
+        await transitionTask(task.taskId, { to: "running" });
+
+        const rec = await runTaskPlan(task.taskId);
+
+        expect(rec.status).toBe("running");
+        const plan = rec.meta?.v4_plan as { steps: { index: number; status: string }[] } | undefined;
+        expect(plan?.steps?.[0]?.status).toBe("running");
+    });
 });

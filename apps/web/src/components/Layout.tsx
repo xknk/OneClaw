@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { useLocale } from "@/locale/LocaleContext";
 import { useTheme } from "@/theme/ThemeContext";
@@ -9,10 +9,12 @@ import { getProfile } from "@/lib/localUser";
 
 export function Layout() {
     const navigate = useNavigate();
+    const location = useLocation();
     const { hasToken, logout } = useAuth();
     const { t } = useLocale();
     const { resolved, toggleLightDark } = useTheme();
     const profile = getProfile();
+    const isChatRoute = location.pathname === "/";
 
     const nav = useMemo(
         () => [
@@ -31,8 +33,14 @@ export function Layout() {
         "bg-slate-200 text-claw-800 dark:bg-slate-800 dark:text-claw-300";
 
     return (
-        <div className="flex min-h-dvh flex-col">
-            <header className="sticky top-0 z-40 border-b border-slate-200/90 bg-white/80 px-4 py-3 backdrop-blur-md dark:border-slate-800/80 dark:bg-slate-950/85 safe-pt">
+        <div
+            className={
+                isChatRoute
+                    ? "flex h-dvh max-h-dvh min-h-0 flex-col overflow-x-hidden overflow-y-hidden overscroll-none"
+                    : "flex min-h-dvh flex-col"
+            }
+        >
+            <header className="sticky top-0 z-40 shrink-0 border-b border-slate-200/90 bg-white/80 px-4 py-3 backdrop-blur-md dark:border-slate-800/80 dark:bg-slate-950/85 safe-pt">
                 <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                     <div className="flex min-w-0 items-center justify-between gap-2 sm:justify-start">
                         <div className="flex min-w-0 items-center gap-2">
@@ -119,8 +127,20 @@ export function Layout() {
                 </div>
             </header>
 
-            <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 pb-24 pt-4 sm:pb-8">
-                <Outlet />
+            <main
+                className={`mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-4 pt-4${
+                    isChatRoute ? " overflow-hidden" : ""
+                }`}
+            >
+                <div
+                    className={
+                        isChatRoute
+                            ? "flex min-h-0 flex-1 flex-col overflow-hidden pb-0"
+                            : "pb-24 sm:pb-8"
+                    }
+                >
+                    <Outlet />
+                </div>
             </main>
 
             <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200/90 bg-white/95 pb-safe backdrop-blur-lg dark:border-slate-800/90 dark:bg-slate-950/95 sm:hidden">

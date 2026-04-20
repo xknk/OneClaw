@@ -295,9 +295,17 @@ export async function runTaskPlan(taskId: string, options: RunTaskPlanOptions = 
 
         try {
             // [调用执行器]: 在此回调内部必须包含具体的 ToolPolicyGuard.assertToolAccess 校验
-            if (options.executeStep) {
-                await options.executeStep({ task: cur, step, traceId });
+            if (!options.executeStep) {
+                // 无内置执行器（例如仅通过 WebChat 调工具）：不要把本步标成 done。
+                // 否则「运行」按钮会空转完成所有步骤，导致 M2 对话侧找不到 status=running 的步骤。
+                cur = await appendNote(cur, "runner_wait_webchat", {
+                    traceId,
+                    stepIndex: step.index,
+                });
+                return cur;
             }
+
+            await options.executeStep({ task: cur, step, traceId });
 
             // 步骤执行成功
             step.status = "done";

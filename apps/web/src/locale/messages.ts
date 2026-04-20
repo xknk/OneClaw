@@ -103,6 +103,13 @@ const zh: Record<string, string> = {
     "chat.resetFail": "重置失败",
     "chat.deleteChat": "删除对话",
     "chat.confirmDeleteChat": "从本机列表移除并删除网关侧该会话的转录（不可恢复）？",
+    "chat.riskDialogTitle": "高风险操作需确认",
+    "chat.riskDialogBodyTask": "当前任务已暂停，等待你批准本次高风险工具调用。确认后将继续对话并提示模型重试。",
+    "chat.riskDialogBodySession": "本次对话未关联任务；模型请求的高风险操作需你确认。确认后将自动发送一条继续指令。",
+    "chat.riskDialogApprove": "批准并继续",
+    "chat.riskDialogDismiss": "稍后处理",
+    "chat.riskApproveContinueUser":
+        "（用户已在界面批准高风险操作）请立即再次调用刚才被拦截的工具以完成请求。",
     "tasks.guestWarnBefore": "访客无法创建任务。请",
     "tasks.guestWarnAfter": "并保存网关令牌（首次将自动在本机注册）。",
     "tasks.filter": "筛选",
@@ -125,6 +132,7 @@ const zh: Record<string, string> = {
     "tasks.loadFail": "加载失败",
     "tasks.delete": "删除",
     "tasks.confirmDelete": "确定永久删除该任务？此操作不可恢复。",
+    "tasks.confirmBulkDelete": "将永久删除所选任务（不可恢复）。是否继续？",
     "tasks.createFail": "创建失败",
     "taskStatus.draft": "草稿",
     "taskStatus.planned": "已计划",
@@ -369,6 +377,15 @@ const en: Record<string, string> = {
     "chat.deleteChat": "Delete chat",
     "chat.confirmDeleteChat":
         "Remove from this device and delete the server transcript for this session? This cannot be undone.",
+    "chat.riskDialogTitle": "Confirm high-risk action",
+    "chat.riskDialogBodyTask":
+        "This task is paused until you approve the pending high-risk tool call. After approval, the chat will continue and the model will be asked to retry.",
+    "chat.riskDialogBodySession":
+        "No task is linked; the model requested a high-risk action. After approval, a follow-up message will be sent automatically.",
+    "chat.riskDialogApprove": "Approve and continue",
+    "chat.riskDialogDismiss": "Later",
+    "chat.riskApproveContinueUser":
+        "(User approved the high-risk action in the UI.) Please invoke the blocked tool again immediately to complete the request.",
     "tasks.guestWarnBefore": "Guests cannot create tasks. ",
     "tasks.guestWarnAfter": " and save the gateway token (first visit registers locally).",
     "tasks.filter": "Filter",
@@ -391,6 +408,7 @@ const en: Record<string, string> = {
     "tasks.loadFail": "Load failed",
     "tasks.delete": "Delete",
     "tasks.confirmDelete": "Permanently delete this task? This cannot be undone.",
+    "tasks.confirmBulkDelete": "Permanently delete the selected tasks? This cannot be undone.",
     "tasks.createFail": "Create failed",
     "taskStatus.draft": "Draft",
     "taskStatus.planned": "Planned",

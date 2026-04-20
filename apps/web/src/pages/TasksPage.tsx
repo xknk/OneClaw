@@ -36,6 +36,7 @@ export function TasksPage() {
     const [templateId, setTemplateId] = useState("");
     const [templates, setTemplates] = useState<TaskTemplateSummary[]>([]);
     const [creating, setCreating] = useState(false);
+    const [selected, setSelected] = useState<Record<string, boolean>>({});
 
     useEffect(() => {
         if (!hasToken) {
@@ -66,6 +67,7 @@ export function TasksPage() {
                 failedOnly,
             });
             setTasks(rows);
+            setSelected({});
         } catch (e) {
             setError(e instanceof Error ? e.message : t("tasks.loadFail"));
         } finally {
@@ -108,6 +110,31 @@ export function TasksPage() {
         setError(null);
         try {
             await apiDeleteTask(taskId);
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : t("tasks.loadFail"));
+        }
+    };
+
+    const selectedIds = Object.entries(selected)
+        .filter(([, v]) => v)
+        .map(([k]) => k);
+    const allChecked = tasks.length > 0 && selectedIds.length === tasks.length;
+    const toggleAll = (v: boolean) => {
+        const next: Record<string, boolean> = {};
+        for (const row of tasks) next[row.taskId] = v;
+        setSelected(next);
+    };
+    const bulkDelete = async () => {
+        if (!hasToken) return;
+        const n = selectedIds.length;
+        if (n === 0) return;
+        if (!window.confirm(t("tasks.confirmBulkDelete"))) return;
+        setError(null);
+        try {
+            for (const id of selectedIds) {
+                await apiDeleteTask(id);
+            }
             await load();
         } catch (e) {
             setError(e instanceof Error ? e.message : t("tasks.loadFail"));
@@ -225,8 +252,25 @@ export function TasksPage() {
 
             <Card className="overflow-hidden p-0">
                 <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-                    <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("tasks.listTitle")}</h2>
-                    <p className="text-xs text-slate-600 dark:text-slate-500">{t("tasks.listHint")}</p>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{t("tasks.listTitle")}</h2>
+                            <p className="text-xs text-slate-600 dark:text-slate-500">{t("tasks.listHint")}</p>
+                        </div>
+                        {hasToken && (
+                            <div className="flex items-center gap-2">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    className="min-h-9 px-3 text-xs"
+                                    disabled={selectedIds.length === 0}
+                                    onClick={() => void bulkDelete()}
+                                >
+                                    批量删除（{selectedIds.length}）
+                                </Button>
+                            </div>
+                        )}
+                    </div>
                 </div>
                 {loading ? (
                     <p className="p-6 text-center text-slate-500">{t("tasks.loading")}</p>
@@ -234,8 +278,31 @@ export function TasksPage() {
                     <p className="p-6 text-center text-slate-500">{t("tasks.empty")}</p>
                 ) : (
                     <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {hasToken && (
+                            <li className="flex items-center gap-3 px-4 py-2 text-xs text-slate-600 dark:text-slate-400">
+                                <input
+                                    type="checkbox"
+                                    checked={allChecked}
+                                    onChange={(e) => toggleAll(e.target.checked)}
+                                    className="h-4 w-4 rounded border-slate-400 dark:border-slate-600"
+                                />
+                                <span>全选本页</span>
+                            </li>
+                        )}
                         {tasks.map((task) => (
                             <li key={task.taskId} className="flex items-stretch">
+                                {hasToken && (
+                                    <div className="flex items-center px-4">
+                                        <input
+                                            type="checkbox"
+                                            checked={Boolean(selected[task.taskId])}
+                                            onChange={(e) =>
+                                                setSelected((prev) => ({ ...prev, [task.taskId]: e.target.checked }))
+                                            }
+                                            className="h-4 w-4 rounded border-slate-400 dark:border-slate-600"
+                                        />
+                                    </div>
+                                )}
                                 <Link
                                     to={`/tasks/${encodeURIComponent(task.taskId)}`}
                                     className="flex min-w-0 flex-1 flex-col gap-1 px-4 py-3 transition hover:bg-slate-100 dark:hover:bg-slate-800/40 sm:flex-row sm:items-center sm:justify-between"
@@ -247,10 +314,7 @@ export function TasksPage() {
                                         <p className="font-mono text-xs text-slate-500">{task.taskId}</p>
                                     </div>
                                     <div className="flex shrink-0 items-center gap-2">
-                                        <StatusBadge
-                                            status={task.status}
-                                            label={t(`taskStatus.${task.status}`)}
-                                        />
+                                        <StatusBadge status={task.status} label={t(`taskStatus.${task.status}`)} />
                                         <span className="text-xs text-slate-500">
                                             {formatDateTime(task.updatedAt, locale)}
                                         </span>

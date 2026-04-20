@@ -27,6 +27,12 @@ export type BuildModelContextResult = {
     rolling: RollingState;
 };
 
+/** 构建上下文时的可选配置（滚动摘要合并使用的模型与对话对齐） */
+export type BuildModelContextOptions = {
+    /** 与 models.json 中模型 id 一致；不传则按 resolveRollingSummaryModelKey 规则解析 */
+    summaryModelKey?: string;
+};
+
 /**
  * 【辅助工具】微缩清理内容
  */
@@ -143,7 +149,8 @@ function assembleFinalSequence(summary: string, workingMsgs: ChatMessage[]): Cha
 
 export async function buildMessagesForModel(
     fullMessages: ChatMessage[],
-    rolling: RollingState
+    rolling: RollingState,
+    options?: BuildModelContextOptions,
 ): Promise<BuildModelContextResult> {
     // 1. 状态校验与初始化
     let { rollingSummary, archivedMessageCount = 0, consecutiveFailures = 0 } = rolling;
@@ -169,7 +176,7 @@ export async function buildMessagesForModel(
             const itemsToMergeCount = Math.floor(workingMessages.length * 0.5);
             const batch = workingMessages.slice(0, itemsToMergeCount);
 
-            rollingSummary = await mergeRollingSummary(rollingSummary, batch);
+            rollingSummary = await mergeRollingSummary(rollingSummary, batch, options?.summaryModelKey);
             archivedMessageCount = safeStartIdx + itemsToMergeCount;
             workingMessages = workingMessages.slice(itemsToMergeCount);
 
@@ -202,7 +209,8 @@ export async function buildMessagesForModel(
 export async function triggerBackgroundMaintenance(
     fullMessages: ChatMessage[],
     rolling: RollingState,
-    onUpdate: (next: RollingState) => Promise<void>
+    onUpdate: (next: RollingState) => Promise<void>,
+    options?: BuildModelContextOptions,
 ) {
     if ((rolling.consecutiveFailures || 0) >= MAX_CONSECUTIVE_FAILURES) return;
 
@@ -213,7 +221,7 @@ export async function triggerBackgroundMaintenance(
         try {
             const batchSize = Math.floor(rawTail.length * 0.5);
             const batch = microcompactMessages(rawTail.slice(0, batchSize));
-            const newSummary = await mergeRollingSummary(rolling.rollingSummary, batch);
+            const newSummary = await mergeRollingSummary(rolling.rollingSummary, batch, options?.summaryModelKey);
 
             await onUpdate({
                 rollingSummary: newSummary,

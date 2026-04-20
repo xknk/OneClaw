@@ -20,6 +20,7 @@ import { sendOneBotMessage } from "@/channels/qq/sendOneBotMessage";
 import type { OneBotMessageEvent } from "@/channels/qq/oneBotTypes";
 import { isBotMentioned } from "@/channels/qq/isBotMentioned";
 import { handleUnifiedChat, DEFAULT_SESSION_KEY } from "./chatProcessing";
+import { approveSessionChatRisk } from "@/session/riskApprovalSession";
 import { registerTaskRoutes } from "./taskRoutes";
 import { registerWorkspaceRoutes } from "./workspaceRoutes";
 import { listModelsForClient } from "@/llm/modelCatalog";
@@ -95,6 +96,34 @@ export function createServer() {
             console.error("/api/chat 错误:", redactForLog(err));
             res.status(500).json({
                 error: err instanceof Error ? err.message : "服务器内部错误",
+            });
+        }
+    });
+
+    /**
+     * 无 taskId 时高风险工具：用户在聊天页确认后放行下一次同工具调用
+     */
+    app.post("/api/chat/approve-risk", async (req, res) => {
+        try {
+            const body = req.body as { sessionKey?: unknown; agentId?: unknown };
+            const sessionKey =
+                typeof body.sessionKey === "string" && body.sessionKey.trim() !== ""
+                    ? body.sessionKey.trim()
+                    : "";
+            const agentId =
+                typeof body.agentId === "string" && body.agentId.trim() !== ""
+                    ? body.agentId.trim()
+                    : "main";
+            if (!sessionKey) {
+                res.status(400).json({ error: "需要 sessionKey" });
+                return;
+            }
+            const out = await approveSessionChatRisk(sessionKey as SessionKey, agentId);
+            res.json({ ok: true, toolName: out.toolName });
+        } catch (err) {
+            console.error("/api/chat/approve-risk:", redactForLog(err));
+            res.status(400).json({
+                error: err instanceof Error ? err.message : "批准失败",
             });
         }
     });

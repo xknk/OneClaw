@@ -45,7 +45,7 @@ export function ChatSidebar({
 
     const list = (
         <div className="flex h-full min-h-0 flex-col">
-            <div className="border-b border-slate-200/90 p-2 dark:border-slate-800/90">
+            <div className="sticky top-0 z-10 border-b border-slate-200/90 bg-white/90 p-2 backdrop-blur-md dark:border-slate-800/90 dark:bg-slate-950/70">
                 <Button type="button" className="w-full" onClick={onNewChat}>
                     {t("chat.newChatBtn")}
                 </Button>
@@ -101,7 +101,7 @@ export function ChatSidebar({
 
     return (
         <>
-            <aside className="hidden w-[min(100%,280px)] shrink-0 flex-col border-r border-slate-200/90 bg-white/60 md:flex dark:border-slate-800/90 dark:bg-slate-950/50">
+            <aside className="hidden h-full min-h-0 w-[min(100%,280px)] shrink-0 flex-col overflow-hidden border-r border-slate-200/90 bg-white/60 md:flex dark:border-slate-800/90 dark:bg-slate-950/50">
                 <p className="border-b border-slate-200/90 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:border-slate-800/90">
                     {t("chat.sidebarTitle")}
                 </p>

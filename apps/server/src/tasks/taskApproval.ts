@@ -13,6 +13,10 @@ import {
 import type { TaskRecord } from "./types";
 import { readTask, writeTask } from "./taskStore";
 import { transitionTask } from "./taskService";
+import {
+    setPendingChatRiskApproval,
+    tryConsumeChatRiskGrant,
+} from "@/session/riskApprovalSession";
 
 /** 定义哪些工具是高风险的：exec、apply_patch、delete_file */
 const HIGH_RISK_TOOLS = new Set(["exec", "apply_patch", "delete_file"]);
@@ -41,6 +45,21 @@ function summarizeArgs(args: Record<string, unknown> | undefined): string {
 function nowIso(): string {
     return new Date().toISOString();
 }
+
+function statusZh(status: TaskRecord["status"]): string {
+    switch (status) {
+        case "draft": return "草稿";
+        case "planned": return "已计划";
+        case "running": return "运行中";
+        case "pending_approval": return "待审批";
+        case "review": return "评审中";
+        case "approved": return "已通过";
+        case "rejected": return "已拒绝";
+        case "done": return "已完成";
+        case "failed": return "失败";
+        case "cancelled": return "已取消";
+    }
+}
 /** 读取已批准的高风险工具名集合 */
 function readGrantedToolNames(meta: Record<string, unknown> | undefined): Set<string> {
     const out = new Set<string>();
@@ -63,62 +82,89 @@ export async function interceptHighRiskToolForTask(opts: {
     toolName: string;
     args: Record<string, unknown> | undefined;
     traceId: string;
+    /** WebChat 会话键；无任务时用于会话级挂起与放行 */
+    sessionKey?: string;
+    agentId?: string;
 }): Promise<string | null> {
-    // 1. 前置检查：如果没有任务上下文、未开启审批功能、或不是高风险工具，直接放行
-    if (!opts.taskId?.trim()) return null;
     if (!appConfig.taskHighRiskApprovalEnabled) return null;
     if (!requiresTaskRiskApproval(opts.toolName, opts.riskLevel)) return null;
 
-    const taskId = opts.taskId.trim();
-    const t = await readTask(taskId);
-    if (!t) return null;
+    const sk = opts.sessionKey?.trim();
+    const aid = opts.agentId?.trim() || "main";
 
-    // 2. 状态检查：如果任务已经是“待审批”状态，说明这是模型在未获批前的重复请求，直接拒绝
-    if (t.status === "pending_approval") {
-        const summary = summarizeArgs(opts.args);
+    // 无任务：先尝试消耗用户在页面批准的一次放行额度
+    if (!opts.taskId?.trim() && sk) {
+        if (await tryConsumeChatRiskGrant(sk, aid, opts.toolName)) {
+            return null;
+        }
+    }
+
+    if (opts.taskId?.trim()) {
+        const taskId = opts.taskId.trim();
+        const t = await readTask(taskId);
+        if (!t) return null;
+
+        if (t.status === "pending_approval") {
+            const summary = summarizeArgs(opts.args);
+            return (
+                `无权限（待审批）：任务 ${taskId} 当前为 pending_approval。` +
+                `请在页面弹窗中批准或调用接口后再重试工具「${opts.toolName}-${summary}」。`
+            );
+        }
+
+        if (t.status !== "running") return null;
+        if (readGrantedToolNames(t.meta).has(opts.toolName)) return null;
+
+        const at = nowIso();
+        const argsSummary = summarizeArgs(opts.args);
+        const rollbackHint = "批准后可在同一会话中再次调用同一工具；若放弃可取消任务。";
+
+        const pendingPayload = {
+            toolName: opts.toolName,
+            argsSummary,
+            traceId: opts.traceId,
+            requestedAt: at,
+            impactScope: `本任务上下文内执行；工具=${opts.toolName}`,
+            rollbackHint,
+        };
+
+        await writeTask({
+            ...t,
+            updatedAt: at,
+            meta: { ...(t.meta ?? {}), [META_PENDING_APPROVAL_KEY]: pendingPayload },
+        });
+
+        await transitionTask(taskId, {
+            to: "pending_approval",
+            reason: `high_risk_tool:${opts.toolName}`,
+            timelineNote: `待审批：${opts.toolName} ${argsSummary.slice(0, 160)}`,
+        });
+
         return (
-            `无权限（待审批）：任务 ${taskId} 当前为 pending_approval。` +
-            `请先调用批准接口后再重试工具「${opts.toolName}-${summary}」。`
+            `【已拦截 · 待人工审批】工具「${opts.toolName}」为高风险操作，状态已设为 pending_approval。\n` +
+            `动作摘要：${argsSummary}\n` +
+            `请在当前对话页弹窗中确认，或调用：POST /api/tasks/${taskId}/approve 后再重试。`
         );
     }
 
-    // 3. 拦截逻辑：只有正在运行的任务遇到高风险工具才触发拦截
-    if (t.status !== "running") return null;
-    if (readGrantedToolNames(t.meta).has(opts.toolName)) return null;
+    // 无 taskId：会话级挂起（与任务状态机独立）
+    if (!sk) {
+        return (
+            `【已拦截 · 待确认】工具「${opts.toolName}」需要人工确认，但缺少 sessionKey，无法挂起审批。`
+        );
+    }
 
     const at = nowIso();
-    const argsSummary = summarizeArgs(opts.args);
-    const rollbackHint = "批准后可在同一会话中再次调用同一工具；若放弃可取消任务。";
-    
-    // 构造挂起的快照数据，存入 meta 供前端展示
-    const pendingPayload = {
+    await setPendingChatRiskApproval(sk, aid, {
         toolName: opts.toolName,
-        argsSummary,
+        argsSummary: summarizeArgs(opts.args),
         traceId: opts.traceId,
         requestedAt: at,
-        impactScope: `本任务上下文内执行；工具=${opts.toolName}`,
-        rollbackHint,
-    };
-
-    // 更新任务：保存挂起信息
-    await writeTask({
-        ...t,
-        updatedAt: at,
-        meta: { ...(t.meta ?? {}), [META_PENDING_APPROVAL_KEY]: pendingPayload },
     });
 
-    // 4. 驱动状态机流转到“待审批”
-    await transitionTask(taskId, {
-        to: "pending_approval",
-        reason: `high_risk_tool:${opts.toolName}`,
-        timelineNote: `待审批：${opts.toolName} ${argsSummary.slice(0, 160)}`,
-    });
-
-    // 5. 返回给 LLM 的错误提示：告知模型任务已挂起，它现在应该停止动作，等待用户确认
     return (
-        `【已拦截 · 待人工审批】工具「${opts.toolName}」为高风险操作，状态已设为 pending_approval。\n` +
-        `动作摘要：${argsSummary}\n` +
-        `请让用户调用：POST /api/tasks/${taskId}/approve 批准后再重试。`
+        `【已拦截 · 待确认】工具「${opts.toolName}」为高风险操作。请在当前页弹窗中点击「批准执行」，` +
+        `然后再发一条消息让模型重试该工具。`
     );
 }
 
@@ -129,7 +175,7 @@ export async function approvePendingTask(taskId: string, comment?: string): Prom
     const cur = await readTask(taskId.trim());
     if (!cur) throw new Error("任务不存在");
     if (cur.status !== "pending_approval") {
-        throw new Error("仅 pending_approval 状态可批准恢复为 running");
+        throw new Error(`仅「待审批」状态可批准恢复为「运行中」（当前状态：${statusZh(cur.status)}）。`);
     }
 
     const at = nowIso(); // 当前时间戳（ISO 格式）

@@ -42,9 +42,12 @@ export class WebChatChannelAdapter implements ChannelAdapter {
             return;
         }
 
-        // 最终返回给前端的协议格式：{ "reply": "文本内容" }
+        // 最终返回给前端的协议格式：{ reply, metadata }（metadata 含 taskStatus / 待审批快照等）
         res.json({
-            reply: message.text
+            reply: message.text,
+            ...(message.metadata && Object.keys(message.metadata).length > 0
+                ? { metadata: message.metadata }
+                : {}),
         });
     }
 }

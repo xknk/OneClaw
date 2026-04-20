@@ -17,15 +17,32 @@ import {
 import { mergeCreateInputWithTemplate } from "./templates";
 import {
     META_LAST_FAILURE_CONTEXT_KEY,
+    META_PLAN_KEY,
     type TaskLastFailureContext,
+    type TaskPlan,
 } from "./collaborationTypes";
-import { getTaskPlanFromRecord } from "./collaborationService";
+import { getRunningPlanStepFromRecord, getTaskPlanFromRecord } from "./collaborationService";
 import { validateMergedTemplateParams } from "./templateValidation";
 import { runTaskPlan, resumeTaskFromCheckpoint } from "./taskRunner";
 
 /** 内部工具：获取当前时间的 ISO 字符串 */
 function nowIso(): string {
     return new Date().toISOString();
+}
+
+function statusZh(status: TaskStatus): string {
+    switch (status) {
+        case "draft": return "草稿";
+        case "planned": return "已计划";
+        case "running": return "运行中";
+        case "pending_approval": return "待审批";
+        case "review": return "评审中";
+        case "approved": return "已通过";
+        case "rejected": return "已拒绝";
+        case "done": return "已完成";
+        case "failed": return "失败";
+        case "cancelled": return "已取消";
+    }
 }
 
 /**
@@ -65,6 +82,31 @@ export async function createTask(input: CreateTaskInput = {}): Promise<TaskRecor
 /** 获取单个任务详情 */
 export async function getTask(taskId: string): Promise<TaskRecord | null> {
     return readTask(taskId.trim());
+}
+
+export async function updateTaskTitle(taskId: string, title: string): Promise<TaskRecord> {
+    const cur = await readTask(taskId.trim());
+    if (!cur) throw new Error("任务不存在");
+    const nextTitle = title.trim().slice(0, 500);
+    if (!nextTitle) {
+        throw new Error("标题不能为空");
+    }
+    if (nextTitle === cur.title) {
+        return cur;
+    }
+    const at = nowIso();
+    const timeline = [
+        ...cur.timeline,
+        {
+            kind: "note" as const,
+            at,
+            text: `标题已更新：${cur.title} → ${nextTitle}`,
+            meta: { source: "updateTaskTitle" },
+        },
+    ];
+    const next: TaskRecord = { ...cur, title: nextTitle, updatedAt: at, timeline };
+    await writeTask(next);
+    return next;
 }
 
 /** 从磁盘删除任务记录（不可恢复） */
@@ -165,7 +207,7 @@ export async function retryTask(taskId: string, reason?: string): Promise<TaskRe
     const cur = await readTask(taskId.trim());
     if (!cur) throw new Error("任务不存在");
     if (cur.status !== "failed") {
-        throw new Error("仅失败态任务可重试（failed -> running）");
+        throw new Error(`仅「失败」状态任务可重试（当前状态：${statusZh(cur.status)}）。`);
     }
     // 1. 状态迁移
     const moved = await transitionTask(taskId, {
@@ -192,7 +234,7 @@ export async function resumeFromCheckpoint(
     const cur = await readTask(taskId.trim());
     if (!cur) throw new Error("任务不存在");
     if (cur.status !== "failed") {
-        throw new Error("仅失败任务建议从检查点恢复为 running");
+        throw new Error(`仅「失败」状态任务可从检查点恢复为「运行中」（当前状态：${statusZh(cur.status)}）。`);
     }
     const moved = await transitionTask(taskId, {
         to: "running",
@@ -289,6 +331,57 @@ export function parseTaskStatus(raw: string | undefined): TaskStatus | undefined
     return all.includes(s) ? s : undefined;
 }
 
+/**
+ * WebChat 接入时修复「任务为 running，但 v4_plan 中没有任何 running 步」的失步状态。
+ * 否则 m2 步骤工具策略会判定 STEP_INVALID，模型无法调用任何工具。
+ *
+ * 策略：优先将第一个 pending 标为 running；若无 pending 且存在 done，则将最后一个 done 恢复为 running（常见于误标或仅对话未真实执行工具）。
+ */
+async function repairPlanRunningStepIfNeeded(task: TaskRecord): Promise<TaskRecord> {
+    if (task.status !== "running") return task;
+    const plan = getTaskPlanFromRecord(task);
+    if (!plan?.steps?.length) return task;
+    if (getRunningPlanStepFromRecord(task)) return task;
+
+    const steps = plan.steps.map((s) => ({ ...s }));
+    let note: string | undefined;
+
+    const pendingIdx = steps.findIndex((s) => (s.status ?? "pending") === "pending");
+    if (pendingIdx >= 0) {
+        steps[pendingIdx] = { ...steps[pendingIdx], status: "running" };
+        note = `计划步骤自动修复：步骤 ${steps[pendingIdx].index}（${steps[pendingIdx].title}）从 pending 进入 running`;
+    } else {
+        for (let i = steps.length - 1; i >= 0; i--) {
+            if (steps[i].status === "done") {
+                steps[i] = { ...steps[i], status: "running" };
+                note = `计划步骤自动修复：步骤 ${steps[i].index}（${steps[i].title}）曾标记为 done，与运行中任务不一致，已恢复为 running 以继续执行`;
+                break;
+            }
+        }
+    }
+
+    if (!note) return task;
+
+    const newPlan: TaskPlan = { ...plan, steps };
+    const at = nowIso();
+    const next: TaskRecord = {
+        ...task,
+        updatedAt: at,
+        meta: { ...(task.meta ?? {}), [META_PLAN_KEY]: newPlan },
+        timeline: [
+            ...(task.timeline ?? []),
+            {
+                kind: "note",
+                at,
+                text: note,
+                meta: { source: "repairPlanRunningStepIfNeeded" },
+            },
+        ],
+    };
+    await writeTask(next);
+    return next;
+}
+
 /** 
  * 【任务预处理结果接口】
  * 用于定义在对话周期内，系统应该如何对待关联的任务（TaskRecord）。
@@ -380,5 +473,8 @@ export async function prepareTaskForChatRound(taskId: string): Promise<PrepareTa
     }
 
     // 8. 默认返回：此时任务通常已处于 running 状态，允许全权操作（改状态+记笔记）
+    if (t.status === "running") {
+        t = await repairPlanRunningStepIfNeeded(t);
+    }
     return { record: t, hooksEnabled: true, notesOnly: false };
 }

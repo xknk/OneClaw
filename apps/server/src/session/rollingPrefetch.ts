@@ -3,6 +3,7 @@
  * 下一轮用户发消息时若预跑已完成，可少做甚至不做同步摘要 LLM 调用。
  */
 import { appConfig } from "@/config/evn";
+import { resolveRollingSummaryModelKey } from "@/llm/model";
 import { buildMessagesForModel } from "@/session/buildModelContext";
 import { getRollingState, setRollingState, type RollingState } from "@/session/store";
 import type { SessionKey } from "@/session/type";
@@ -39,7 +40,9 @@ export function scheduleRollingPrefetchAfterAssistant(
         .then(async () => {
             const full = await readMessages(sessionId, agentId);
             const rolling: RollingState = await getRollingState(sessionKey, agentId);
-            const built = await buildMessagesForModel(full, rolling);
+            const built = await buildMessagesForModel(full, rolling, {
+                summaryModelKey: resolveRollingSummaryModelKey(),
+            });
             await setRollingState(sessionKey, agentId, built.rolling);
         })
         .catch((e) => {

@@ -5,9 +5,11 @@ import { useAuth } from "@/auth/AuthContext";
 import { useLocale } from "@/locale/LocaleContext";
 import {
     apiChat,
+    apiChatApproveRisk,
     apiListTasks,
     apiModels,
     apiSessionReset,
+    apiTaskApprove,
     apiWorkspaceAgentsGet,
     apiWorkspaceSessionDelete,
 } from "@/api/client";
@@ -39,6 +41,11 @@ export function ChatPage() {
     const [modelOptions, setModelOptions] = useState<{ id: string; label: string }[]>([]);
     const [defaultModelId, setDefaultModelId] = useState<string>("");
     const [recentTasks, setRecentTasks] = useState<{ taskId: string; title: string }[]>([]);
+    /** 高风险操作待确认：任务态或纯会话态 */
+    const [riskDialog, setRiskDialog] = useState<
+        null | { kind: "task"; taskId: string } | { kind: "session" }
+    >(null);
+    const [riskApproving, setRiskApproving] = useState(false);
     const bottomRef = useRef<HTMLDivElement>(null);
     const prevActiveId = useRef<string | null>(null);
 
@@ -185,80 +192,135 @@ export function ChatPage() {
         [activeId, hasToken, userId],
     );
 
-    const sendMessage = useCallback(async () => {
-        const text = input.trim();
-        if (!text || loading) {
+    const sendUserMessage = useCallback(
+        async (rawText: string, opts?: { clearComposer?: boolean }) => {
+            const text = rawText.trim();
+            if (!text || loading) {
+                return;
+            }
+            setError(null);
+            if (opts?.clearComposer !== false) {
+                setInput("");
+            }
+            setLoading(true);
+
+            const sk =
+                hasToken && activeId
+                    ? (conversations.find((c) => c.id === activeId)?.sessionKey ?? guestSessionKey)
+                    : guestSessionKey;
+            const aid = agentId.trim() || "main";
+
+            const userMsg: ChatMessage = { role: "user", text };
+            setMessages((m) => [...m, userMsg]);
+
+            try {
+                const body: Parameters<typeof apiChat>[0] = {
+                    message: text,
+                    sessionKey: sk,
+                    agentId: aid,
+                };
+                if (modelId.trim()) {
+                    body.modelId = modelId.trim();
+                }
+                if (intent.trim()) {
+                    body.intent = intent.trim();
+                }
+                if (taskId.trim()) {
+                    body.taskId = taskId.trim();
+                }
+                if (taskId.trim() && agentLocked) {
+                    body.agentLocked = true;
+                }
+                const { reply, metadata } = await apiChat(body);
+                const asstMsg: ChatMessage = { role: "assistant", text: reply };
+
+                setMessages((m) => [...m, asstMsg]);
+
+                const ts = taskId.trim();
+                const st = metadata?.taskStatus;
+                if (st === "pending_approval" && ts) {
+                    setRiskDialog({ kind: "task", taskId: ts });
+                } else if (metadata?.pendingSessionRiskApproval && !ts) {
+                    setRiskDialog({ kind: "session" });
+                }
+
+                if (hasToken && activeId && userId) {
+                    setConversations((prev) => {
+                        const cur = prev.find((c) => c.id === activeId);
+                        if (!cur) {
+                            return prev;
+                        }
+                        const mergedMsgs = [...cur.messages, userMsg, asstMsg];
+                        let title = cur.title;
+                        if (cur.messages.length === 0) {
+                            title = text.length > 36 ? `${text.slice(0, 36)}…` : text;
+                        }
+                        const updated: Conversation = {
+                            ...cur,
+                            messages: mergedMsgs,
+                            title,
+                            agentId: aid,
+                            modelId: modelId.trim(),
+                            intent: intent.trim(),
+                            taskId: taskId.trim(),
+                            agentLocked,
+                            updatedAt: new Date().toISOString(),
+                        };
+                        const next = prev.map((c) => (c.id === activeId ? updated : c));
+                        saveConversations(userId, next);
+                        return next;
+                    });
+                }
+            } catch (e) {
+                const msg = e instanceof Error ? e.message : t("chat.errorToken");
+                setError(msg);
+                setMessages((m) => [...m, { role: "assistant", text: `${t("chat.errorPrefix")}${msg}` }]);
+            } finally {
+                setLoading(false);
+            }
+        },
+        [
+            activeId,
+            agentId,
+            agentLocked,
+            conversations,
+            guestSessionKey,
+            hasToken,
+            intent,
+            loading,
+            t,
+            taskId,
+            userId,
+        ],
+    );
+
+    const sendMessage = useCallback(() => {
+        void sendUserMessage(input, { clearComposer: true });
+    }, [input, sendUserMessage]);
+
+    const approveRiskAndContinue = useCallback(async () => {
+        if (!riskDialog) {
             return;
         }
-        setError(null);
-        setInput("");
-        setLoading(true);
-
         const sk =
             hasToken && activeId
                 ? (conversations.find((c) => c.id === activeId)?.sessionKey ?? guestSessionKey)
                 : guestSessionKey;
         const aid = agentId.trim() || "main";
-
-        const userMsg: ChatMessage = { role: "user", text };
-        setMessages((m) => [...m, userMsg]);
-
+        setRiskApproving(true);
+        setError(null);
         try {
-            const body: Parameters<typeof apiChat>[0] = {
-                message: text,
-                sessionKey: sk,
-                agentId: aid,
-            };
-            if (modelId.trim()) {
-                body.modelId = modelId.trim();
+            if (riskDialog.kind === "task") {
+                await apiTaskApprove(riskDialog.taskId);
+            } else {
+                await apiChatApproveRisk({ sessionKey: sk, agentId: aid });
             }
-            if (intent.trim()) {
-                body.intent = intent.trim();
-            }
-            if (taskId.trim()) {
-                body.taskId = taskId.trim();
-            }
-            if (taskId.trim() && agentLocked) {
-                body.agentLocked = true;
-            }
-            const { reply } = await apiChat(body);
-            const asstMsg: ChatMessage = { role: "assistant", text: reply };
-
-            setMessages((m) => [...m, asstMsg]);
-
-            if (hasToken && activeId && userId) {
-                setConversations((prev) => {
-                    const cur = prev.find((c) => c.id === activeId);
-                    if (!cur) {
-                        return prev;
-                    }
-                    const mergedMsgs = [...cur.messages, userMsg, asstMsg];
-                    let title = cur.title;
-                    if (cur.messages.length === 0) {
-                        title = text.length > 36 ? `${text.slice(0, 36)}…` : text;
-                    }
-                    const updated: Conversation = {
-                        ...cur,
-                        messages: mergedMsgs,
-                        title,
-                        agentId: aid,
-                        modelId: modelId.trim(),
-                        intent: intent.trim(),
-                        taskId: taskId.trim(),
-                        agentLocked,
-                        updatedAt: new Date().toISOString(),
-                    };
-                    const next = prev.map((c) => (c.id === activeId ? updated : c));
-                    saveConversations(userId, next);
-                    return next;
-                });
-            }
+            setRiskDialog(null);
+            await sendUserMessage(t("chat.riskApproveContinueUser"), { clearComposer: false });
         } catch (e) {
-            const msg = e instanceof Error ? e.message : t("chat.errorToken");
-            setError(msg);
-            setMessages((m) => [...m, { role: "assistant", text: `${t("chat.errorPrefix")}${msg}` }]);
+            setError(e instanceof Error ? e.message : t("chat.errorToken"));
         } finally {
-            setLoading(false);
+            setRiskApproving(false);
         }
     }, [
         activeId,
@@ -266,13 +328,9 @@ export function ChatPage() {
         conversations,
         guestSessionKey,
         hasToken,
-        input,
-        intent,
-        loading,
+        riskDialog,
+        sendUserMessage,
         t,
-        taskId,
-        agentLocked,
-        userId,
     ]);
 
     const reset = useCallback(async () => {
@@ -429,7 +487,37 @@ export function ChatPage() {
     };
 
     return (
-        <div className="flex min-h-[min(70vh,640px)] flex-1 flex-col gap-3">
+        <div className="flex h-full min-h-0 flex-1 flex-col gap-3">
+            {riskDialog && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="risk-dialog-title"
+                >
+                    <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                        <h2 id="risk-dialog-title" className="text-lg font-semibold text-slate-900 dark:text-white">
+                            {t("chat.riskDialogTitle")}
+                        </h2>
+                        <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
+                            {riskDialog.kind === "task" ? t("chat.riskDialogBodyTask") : t("chat.riskDialogBodySession")}
+                        </p>
+                        <div className="mt-5 flex flex-wrap justify-end gap-2">
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                disabled={riskApproving}
+                                onClick={() => setRiskDialog(null)}
+                            >
+                                {t("chat.riskDialogDismiss")}
+                            </Button>
+                            <Button type="button" disabled={riskApproving} onClick={() => void approveRiskAndContinue()}>
+                                {t("chat.riskDialogApprove")}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {!hasToken && (
                 <p className="rounded-xl border border-slate-200/90 bg-white/70 px-3 py-2 text-xs text-slate-600 dark:border-slate-800/80 dark:bg-slate-900/40 dark:text-slate-400">
                     <span className="text-slate-800 dark:text-slate-300">{t("chat.guestMode")}</span>
@@ -454,7 +542,7 @@ export function ChatPage() {
                     />
                 )}
 
-                <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     <div className="flex items-center gap-2 border-b border-slate-200/90 px-3 py-2 dark:border-slate-800/80 md:hidden">
                         {hasToken && (
                             <Button
@@ -464,6 +552,16 @@ export function ChatPage() {
                                 onClick={() => setMobileHistoryOpen(true)}
                             >
                                 {t("chat.history")}
+                            </Button>
+                        )}
+                        {hasToken && (
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                className="shrink-0 px-3"
+                                onClick={newChat}
+                            >
+                                {t("chat.newChat")}
                             </Button>
                         )}
                         <span className="truncate text-xs text-slate-500 dark:text-slate-500">
@@ -600,8 +698,8 @@ export function ChatPage() {
                         </div>
                     </details>
 
-                    <Card className="flex min-h-[280px] flex-1 flex-col overflow-hidden rounded-none border-0 bg-transparent p-0 shadow-none">
-                        <div className="flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">
+                    <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-none border-0 bg-transparent p-0 shadow-none">
+                        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">
                             {messages.length === 0 && (
                                 <p className="text-center text-sm text-slate-500 dark:text-slate-500">
                                     {hasToken ? t("chat.emptyLoggedIn") : t("chat.emptyGuest")}
@@ -644,7 +742,7 @@ export function ChatPage() {
                                 )}
                             </div>
                         )}
-                        <div className="border-t border-slate-200/90 bg-slate-50/90 p-3 dark:border-slate-800/90 dark:bg-slate-900/40">
+                        <div className="sticky bottom-0 border-t border-slate-200/90 bg-slate-50/95 p-3 backdrop-blur-md dark:border-slate-800/90 dark:bg-slate-950/70">
                             <TextArea
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
