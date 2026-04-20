@@ -11,6 +11,7 @@ import {
     estimateTextTokens,
 } from "@/session/contextLimit";
 import { mergeRollingSummary } from "@/session/summarizeContext";
+import { microcompactTextContent } from "@/session/microcompact";
 import type { RollingState } from "@/session/store";
 
 // --- 【配置常量】 ---
@@ -37,9 +38,9 @@ export type BuildModelContextOptions = {
  * 【辅助工具】微缩清理内容
  */
 function microcompactMessages(messages: ChatMessage[]): ChatMessage[] {
-    return messages.map(msg => ({
+    return messages.map((msg) => ({
         ...msg,
-        content: (msg.content || "").replace(/<!--[\s\S]*?-->/g, '').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{3,}/g, ' ').trim()
+        content: microcompactTextContent(msg.content || ""),
     }));
 }
 

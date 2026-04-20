@@ -13,6 +13,8 @@ export type ZhiPuProviderOptions = Partial<{
     modelName: string;
     apiKey: string;
     temperature: number;
+    signal?: AbortSignal;
+    onAssistantTextDelta?: (chunk: string) => void;
 }>;
 
 export class ZhiPuProvider implements ModelProvider {
@@ -24,8 +26,13 @@ export class ZhiPuProvider implements ModelProvider {
 
     async chatWithTools(
         messages: AgentMessage[],
-        tools: ToolSchema[]
+        tools: ToolSchema[],
+        callOpts?: { signal?: AbortSignal; onAssistantTextDelta?: (chunk: string) => void },
     ): Promise<ChatWithToolsResult> {
-        return chatWithZhiPuWithTools(messages, tools, this.options);
+        return chatWithZhiPuWithTools(messages, tools, {
+            ...this.options,
+            signal: callOpts?.signal ?? this.options.signal,
+            onAssistantTextDelta: callOpts?.onAssistantTextDelta ?? this.options.onAssistantTextDelta,
+        });
     }
 }

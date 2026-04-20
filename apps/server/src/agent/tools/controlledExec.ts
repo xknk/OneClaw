@@ -23,7 +23,7 @@ export interface ExecResult {
 export async function controlledExec(
     command: string,
     args: string[] = [],
-    options?: { timeoutMs?: number; maxOutputChars?: number }
+    options?: { timeoutMs?: number; maxOutputChars?: number; abortSignal?: AbortSignal }
 ): Promise<ExecResult> {
     // 优先级：用户传入配置 > 全局 appConfig 配置
     const timeoutMs = options?.timeoutMs ?? appConfig.execTimeoutMs;
@@ -53,6 +53,15 @@ export async function controlledExec(
         let stderr = "";
         let timedOut = false;
         let truncated = false;
+        const abortSig = options?.abortSignal;
+        const onAbort = (): void => {
+            timedOut = true;
+            proc.kill("SIGTERM");
+        };
+        if (abortSig) {
+            if (abortSig.aborted) onAbort();
+            else abortSig.addEventListener("abort", onAbort, { once: true });
+        }
 
         // 辅助函数：如果字符串超出长度限制，进行截断并标记
         const truncate = (s: string): string => {
@@ -83,6 +92,7 @@ export async function controlledExec(
         // 进程结束（关闭）时的逻辑
         proc.on("close", (code, signal) => {
             clearTimeout(timer); // 清除超时定时器
+            if (abortSig) abortSig.removeEventListener("abort", onAbort);
             resolve({
                 stdout: truncate(stdout),
                 stderr: truncate(stderr),
@@ -96,6 +106,7 @@ export async function controlledExec(
         // 处理启动失败等异常错误
         proc.on("error", (err) => {
             clearTimeout(timer);
+            if (abortSig) abortSig.removeEventListener("abort", onAbort);
             resolve({
                 stdout: "",
                 stderr: err.message,

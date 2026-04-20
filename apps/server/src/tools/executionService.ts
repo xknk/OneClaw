@@ -10,6 +10,8 @@ import { ProviderHealth } from "./providerHealth";
 import type { ToolGuardResult } from "@/security/toolGuard";
 import { normalizeToolGuardResult } from "@/security/toolGuard";
 import { sanitizeToolArgsForTrace } from "@/security/auditSanitize";
+import { appConfig } from "@/config/evn";
+import { sampleLongToolResult } from "@/util/toolResultSample";
 /**
  * 工具执行服务的配置选项
  */
@@ -212,6 +214,21 @@ export class ToolExecutionService {
     async execute(name: string, args: Record<string, unknown> | undefined): Promise<string> {
         const totalStarted = Date.now();
 
+        if (this.ctx.abortSignal?.aborted) {
+            const msg = "（已中止）";
+            await this.onFinished?.({
+                toolName: name,
+                args,
+                result: msg,
+                ok: false,
+                durationMs: Date.now() - totalStarted,
+                source: "abort",
+                errorCode: "ABORTED",
+                attempt: 1,
+            });
+            return msg;
+        }
+
         // --- 0. 修正后的初始 Trace ---
         // 移除了 errorCode，并将 ok 设为 true，代表流程正常启动
         await this.trace?.("tool.execute.start", {
@@ -367,10 +384,19 @@ export class ToolExecutionService {
                 }
 
                 if (result.ok) {
+                    let out = result.content;
+                    const min = appConfig.toolResultSampleMinChars;
+                    if (min > 0 && out.length > min) {
+                        out = sampleLongToolResult(out, {
+                            maxChars: min,
+                            headChars: appConfig.toolResultSampleHeadChars,
+                            tailChars: appConfig.toolResultSampleTailChars,
+                        });
+                    }
                     await this.onFinished?.({
                         toolName: name,
                         args,
-                        result: result.content,
+                        result: out,
                         ok: true,
                         durationMs: result.durationMs,
                         source: result.source,
@@ -383,7 +409,7 @@ export class ToolExecutionService {
                         durationMs: result.durationMs,
                         attempt,
                     });
-                    return result.content;
+                    return out;
                 }
 
                 // 检查是否重试

@@ -1,5 +1,6 @@
 import React from "react";
 import { render } from "ink";
+import { newCliConversationSessionKey } from "@/cli/cliSessionKey";
 import { startTuiWsServer } from "./wsGateway";
 import { TuiApp } from "./TuiApp";
 
@@ -35,7 +36,7 @@ export async function runTuiCli(opts: {
     const { waitUntilExit } = render(
         <TuiApp
             wsUrl={gateway.url}
-            defaultSession={opts.session?.trim() || "cli"}
+            defaultSession={opts.session?.trim() || newCliConversationSessionKey()}
             agentId={opts.agent?.trim() || undefined}
             taskId={opts.task?.trim() || undefined}
         />,

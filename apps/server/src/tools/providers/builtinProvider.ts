@@ -77,7 +77,7 @@ export const builtinProvider: ToolProvider = {
     async execute(
         name: string,
         args: Record<string, unknown> | undefined,
-        _ctx: ToolExecutionContext
+        ctx: ToolExecutionContext
     ): Promise<ToolExecutionResult | null> {
         // 从底层库中获取真正的执行函数
         const tool = getTool(name);
@@ -86,7 +86,7 @@ export const builtinProvider: ToolProvider = {
         const started = Date.now(); // 记录开始时间以计算耗时
         try {
             // 执行底层工具逻辑，args 缺省则传空对象
-            const content = await tool.execute(args ?? {});
+            const content = await tool.execute(args ?? {}, ctx);
 
             // 返回标准化的成功结果
             return {

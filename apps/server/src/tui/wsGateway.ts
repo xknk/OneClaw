@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import type { UnifiedInboundMessage } from "@/channels/unifiedMessage";
+import { newCliConversationSessionKey } from "@/cli/cliSessionKey";
 import { handleUnifiedChat } from "@/server/chatProcessing";
 import { ollamaConfig, zhipuConfig } from "@/config/evn";
 
@@ -40,6 +41,9 @@ function parseClientMessage(raw: RawData): {
     }
 }
 
+/** 当前连接上正在执行的 chat（串行队列里至多一条） */
+type InflightChat = { requestId: string; ac: AbortController };
+
 /**
  * 本机 WebSocket：供 TUI 连接，每帧 chat 走 handleUnifiedChat（与 REPL / WebChat 同链）。
  */
@@ -55,12 +59,14 @@ export async function startTuiWsServer(port: number): Promise<{
     });
 
     wss.on("connection", (ws: WebSocket) => {
+        const fallbackSessionKey = newCliConversationSessionKey();
         const chatQueue: Array<{
             body: NonNullable<ReturnType<typeof parseClientMessage>>;
         }> = [];
         let draining = false;
+        let inflight: InflightChat | null = null;
         // 💡 默认模型设为 zhipu
-        let currentModelType: "ollama" | "zhipu" | undefined = undefined; 
+        let currentModelType: "ollama" | "zhipu" | undefined = undefined;
         const drainChatQueue = async (): Promise<void> => {
             if (draining) return;
             draining = true;
@@ -80,10 +86,14 @@ export async function startTuiWsServer(port: number): Promise<{
                         typeof body.requestId === "string" && body.requestId.trim()
                             ? body.requestId.trim()
                             : undefined;
+                    const ridForCancel = requestId ?? "";
 
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({ type: "started", requestId }));
                     }
+
+                    const ac = new AbortController();
+                    inflight = { requestId: ridForCancel, ac };
 
                     const inbound: UnifiedInboundMessage = {
                         channelId: "webchat",
@@ -91,7 +101,7 @@ export async function startTuiWsServer(port: number): Promise<{
                         sessionKey:
                             typeof body.sessionKey === "string" && body.sessionKey.trim()
                                 ? body.sessionKey.trim()
-                                : "cli",
+                                : fallbackSessionKey,
                         text,
                         timestamp: new Date().toISOString(),
                         ...(typeof body.agentId === "string" && body.agentId.trim()
@@ -104,28 +114,32 @@ export async function startTuiWsServer(port: number): Promise<{
                     };
 
                     try {
-                        await handleUnifiedChat(inbound, async (outbound) => {
-                            if (ws.readyState === WebSocket.OPEN) {
-                                const outText = String(outbound.text ?? "");
-                                ws.send(
-                                    JSON.stringify({
-                                        type: "assistant",
-                                        requestId,
-                                        text: outText,
-                                        metadata: outbound.metadata,
-                                    })
-                                );
-                                if (!outText.trim()) {
+                        await handleUnifiedChat(
+                            inbound,
+                            async (outbound) => {
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    const outText = String(outbound.text ?? "");
                                     ws.send(
                                         JSON.stringify({
-                                            type: "error",
+                                            type: "assistant",
                                             requestId,
-                                            message: "模型返回空结果，请重试或缩短问题。",
+                                            text: outText,
+                                            metadata: outbound.metadata,
                                         })
                                     );
+                                    if (!outText.trim()) {
+                                        ws.send(
+                                            JSON.stringify({
+                                                type: "error",
+                                                requestId,
+                                                message: "模型返回空结果，请重试或缩短问题。",
+                                            })
+                                        );
+                                    }
                                 }
-                            }
-                        });
+                            },
+                            { abortSignal: ac.signal },
+                        );
                     } catch (e) {
                         const message = e instanceof Error ? e.message : String(e);
                         if (ws.readyState === WebSocket.OPEN) {
@@ -138,6 +152,7 @@ export async function startTuiWsServer(port: number): Promise<{
                             );
                         }
                     } finally {
+                        inflight = null;
                         if (ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({ type: "done", requestId }));
                         }
@@ -157,12 +172,26 @@ export async function startTuiWsServer(port: number): Promise<{
             })
         );
 
+        ws.on("close", () => {
+            inflight?.ac.abort();
+        });
+
         ws.on("message", (raw) => {
             const body = parseClientMessage(raw);
             if (!body) return;
+            if (body.type === "cancel") {
+                const cr =
+                    typeof body.requestId === "string" && body.requestId.trim()
+                        ? body.requestId.trim()
+                        : "";
+                if (inflight && (!cr || inflight.requestId === cr)) {
+                    inflight.ac.abort();
+                }
+                return;
+            }
             if (body.type !== "chat" || typeof body.text !== "string") {
-                if (body.type !== "chat") {
-                    ws.send(JSON.stringify({ type: "error", message: "仅支持 type: chat" }));
+                if (body.type !== "chat" && body.type !== "cancel") {
+                    ws.send(JSON.stringify({ type: "error", message: "仅支持 type: chat 或 cancel" }));
                 }
                 return;
             }

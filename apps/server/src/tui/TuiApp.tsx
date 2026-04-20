@@ -281,9 +281,13 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
     const [sessionKey, setSessionKey] = useState(defaultSession);
     const [busy, setBusy] = useState(false);
     const [busyUi, setBusyUi] = useState(false);
+    const busyRef = useRef(false);
+    busyRef.current = busy;
     const [slashIndex, setSlashIndex] = useState(0);
     const wsRef = useRef<WebSocket | null>(null);
     const requestSeqRef = useRef(1);
+    /** 服务端当前正在生成的那条请求（用于 Ctrl+G cancel） */
+    const activeRequestIdRef = useRef<string | null>(null);
     /** 按 requestId 跟踪，避免客户端提前重置与服务端队列不一致导致错位 */
     const pendingByIdRef = useRef<Map<string, { gotAssistant: boolean; gotError: boolean }>>(
         new Map()
@@ -323,6 +327,17 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
             exit();
             return;
         }
+        if (key.ctrl && ch === "g") {
+            if (!busyRef.current) {
+                return;
+            }
+            const ws = wsRef.current;
+            if (ws?.readyState === WebSocket.OPEN) {
+                const rid = activeRequestIdRef.current;
+                ws.send(JSON.stringify({ type: "cancel", ...(rid ? { requestId: rid } : {}) }));
+            }
+            return;
+        }
         if (!isSlashMenuLine(inputRef.current)) {
             return;
         }
@@ -360,12 +375,14 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
             setConnected(false);
             setStatus(locale === "en" ? "disconnected" : "disconnected");
             setBusy(false);
+            activeRequestIdRef.current = null;
             pendingByIdRef.current.clear();
             wsRef.current = null;
         });
         ws.on("error", () => {
             setStatus(locale === "en" ? "error" : "error");
             setBusy(false);
+            activeRequestIdRef.current = null;
             pendingByIdRef.current.clear();
         });
         ws.on("message", (buf) => {
@@ -395,6 +412,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                 if (msg.type === "started") {
                     setBusy(true);
                     if (msg.requestId) {
+                        activeRequestIdRef.current = msg.requestId;
                         if (!pendingByIdRef.current.has(msg.requestId)) {
                             pendingByIdRef.current.set(msg.requestId, {
                                 gotAssistant: false,
@@ -407,6 +425,9 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
                 if (msg.type === "done") {
                     const rid = msg.requestId;
                     if (rid) {
+                        if (activeRequestIdRef.current === rid) {
+                            activeRequestIdRef.current = null;
+                        }
                         const pending = pendingByIdRef.current.get(rid);
                         if (pending && !pending.gotAssistant && !pending.gotError) {
                             appendLine({
@@ -596,6 +617,7 @@ export function TuiApp({ wsUrl, defaultSession, agentId, taskId }: TuiAppProps):
         connected ? T.metaReady(locale) : T.wsStatusLabel(locale, status),
         model || null,
         busyUi ? T.metaStreaming(locale) : T.metaIdle(locale),
+        busyUi ? T.metaStopGen(locale) : null,
         T.metaCtrlC(locale),
     ].filter(Boolean) as string[];
 

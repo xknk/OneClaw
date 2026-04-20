@@ -58,12 +58,20 @@ export async function readStore(agentId: string = agentIdKey): Promise<SessionSt
     await ensureSessionsDir(agentId);
     const p = getStorePath(agentId);
     try {
-        const raw = await fs.readFile(p, "utf-8");
+        const raw = (await fs.readFile(p, "utf-8")).trim();
+        if (raw.length === 0) {
+            return {};
+        }
         const store = JSON.parse(raw) as SessionStore;
         return typeof store === "object" && store !== null ? store : {};
     } catch (err: unknown) {
         // 如果文件不存在 (ENOENT)，返回空对象
         if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return {};
+        // 空文件、写入中断、截断等导致 JSON 不完整：当作空库，避免整站聊天不可用
+        if (err instanceof SyntaxError) {
+            console.warn(`[session/store] sessions.json 无效或已截断，已忽略: ${p}`, err.message);
+            return {};
+        }
         throw err;
     }
 }

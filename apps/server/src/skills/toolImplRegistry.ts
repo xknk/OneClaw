@@ -2,6 +2,7 @@
 
 import type { Skill, SkillToolImpl } from "./types";
 import type { Tool } from "@/agent/types";
+import type { ToolExecutionContext } from "@/tools/types";
 import { generateDailyReport } from "@/reporting/dailyReportService";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -135,7 +136,8 @@ function buildToolFromImpl(toolName: string, impl: SkillToolImpl): Tool | null {
         return {
             name: toolName,
             description: `Skill http tool: ${impl.url}`, // 描述
-            async execute(args: Record<string, unknown>) { // 执行
+            async execute(args: Record<string, unknown>, _ctx?: ToolExecutionContext) {
+                void _ctx;
                 return await callHttpTool(impl.url, method, args); // 调用 HTTP 工具
             },
         };

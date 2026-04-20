@@ -36,7 +36,8 @@ export function tuiHelpLines(
             "",
             "Type `/` at line start for the menu; ↑↓ select, Tab fill, Enter run.",
             "",
-            "Tip: if pnpm dev is running, avoid sharing the same sessionKey with Web.",
+            "Tip: each new terminal run gets a unique session unless you pass --session.",
+            "If pnpm dev is running, avoid using the same sessionKey as a Web tab on purpose.",
         ];
         if (opts.taskId) {
             lines.push(
@@ -61,7 +62,7 @@ export function tuiHelpLines(
         "",
         "行首输入 `/` 弹出命令列表；↑↓ 选择，Tab 填入，Enter 补全或执行。",
         "",
-        "提示: 与 pnpm dev 同时开时，勿与 Web 共用同一 sessionKey。",
+        "提示: 每次新开终端默认新会话；续聊请启动时传 --session。勿与 Web 故意共用同一 sessionKey。",
     ];
     if (opts.taskId) {
         lines.push(
@@ -185,7 +186,7 @@ export function replHelpAppend(locale: UiLocale): string {
             "REPL: type `/` then Tab to complete; `/` + Enter lists commands.",
             "",
             "CLI (pnpm cli repl …):",
-            "  --session <key>    Initial session key (default: cli)",
+            "  --session <key>    Resume a session; omit = new cli-<uuid> each run",
             "  --agent <id>       Agent ID",
             "  --task <taskId>    Bind task (transcript key task:<id>)",
             "  -v, --verbose      Print traceId / metadata to stderr",
@@ -196,7 +197,7 @@ export function replHelpAppend(locale: UiLocale): string {
         "REPL：行首 `/` 后按 Tab 可补全；单独输入 `/` 回车可列出命令。",
         "",
         "启动参数（pnpm cli repl …）:",
-        "  --session <key>    初始会话键，默认 cli",
+        "  --session <key>    续聊指定会话；省略则每次启动新建 cli-<uuid>",
         "  --agent <id>       Agent ID",
         "  --task <taskId>    关联任务（转录固定为 task:<id>）",
         "  -v, --verbose      stderr 打印 traceId / metadata",
@@ -327,6 +328,11 @@ export function tuiBottomHint(locale: UiLocale): string {
     return locale === "en"
         ? " ? shortcuts · / command list · /help · Ctrl+C exit"
         : " ? 快捷键 · / 命令列表 · /help · Ctrl+C 退出";
+}
+
+/** 生成中状态栏：停止流式（与 Web「停止」对应） */
+export function metaStopGen(locale: UiLocale): string {
+    return locale === "en" ? "Ctrl+G stop gen" : "Ctrl+G 停止生成";
 }
 
 

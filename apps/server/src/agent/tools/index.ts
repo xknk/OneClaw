@@ -4,7 +4,7 @@
 
 import type { Tool } from "../types";
 import type { ToolSchema } from "../../llm/providers/ModelProvider";
-import type { ToolRiskLevel } from "../../tools/types";
+import type { ToolExecutionContext, ToolRiskLevel } from "../../tools/types";
 import { deleteFileInWorkspace, listDirInWorkspace, readFileInWorkspace, searchInWorkspace } from "./workspace";
 import { applyPatch } from "./applyPatch";
 import { controlledExec } from "./controlledExec";
@@ -179,7 +179,7 @@ function execTool(): Tool {
         name: "exec",
         riskLevel: "high",
         description: "在服务器上执行一条 shell 命令，有超时和输出长度限制。command 为要执行的命令字符串（如 dir、dir /a）",
-        async execute(args) {
+        async execute(args, ctx?: ToolExecutionContext) {
             const command = args?.command;
             if (!appConfig.execEnabled) {
                 return "exec 工具已通过 ONECLAW_EXEC_ENABLED 关闭";
@@ -187,7 +187,11 @@ function execTool(): Tool {
             if (typeof command !== "string") return "缺少参数 command（要执行的命令）";
             const timeoutMs = typeof args?.timeout_ms === "number" ? args.timeout_ms : appConfig.execTimeoutMs;
             const maxChars = typeof args?.max_output_chars === "number" ? args.max_output_chars : appConfig.execMaxOutputChars;
-            const result = await controlledExec(command, [], { timeoutMs, maxOutputChars: maxChars });
+            const result = await controlledExec(command, [], {
+                timeoutMs,
+                maxOutputChars: maxChars,
+                abortSignal: ctx?.abortSignal,
+            });
             const out = [
                 `exitCode: ${result.exitCode}`,
                 result.timedOut ? "（已超时）" : "",

@@ -46,8 +46,11 @@ export function ChatPage() {
         null | { kind: "task"; taskId: string } | { kind: "session" }
     >(null);
     const [riskApproving, setRiskApproving] = useState(false);
-    const bottomRef = useRef<HTMLDivElement>(null);
+    const chatScrollRef = useRef<HTMLDivElement>(null);
+    const stickToBottomRef = useRef(true);
     const prevActiveId = useRef<string | null>(null);
+    const chatAbortRef = useRef<AbortController | null>(null);
+    const [streamPartial, setStreamPartial] = useState(false);
 
     const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined;
 
@@ -160,7 +163,11 @@ export function ChatPage() {
     }, [activeId, conversations, hasToken]);
 
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        const el = chatScrollRef.current;
+        if (!el || !stickToBottomRef.current) {
+            return;
+        }
+        el.scrollTop = el.scrollHeight;
     }, [messages]);
 
     const persistConversations = useCallback(
@@ -203,6 +210,7 @@ export function ChatPage() {
                 setInput("");
             }
             setLoading(true);
+            stickToBottomRef.current = true;
 
             const sk =
                 hasToken && activeId
@@ -211,7 +219,9 @@ export function ChatPage() {
             const aid = agentId.trim() || "main";
 
             const userMsg: ChatMessage = { role: "user", text };
-            setMessages((m) => [...m, userMsg]);
+            chatAbortRef.current = new AbortController();
+            setStreamPartial(false);
+            setMessages((m) => [...m, userMsg, { role: "assistant", text: "" }]);
 
             try {
                 const body: Parameters<typeof apiChat>[0] = {
@@ -231,10 +241,29 @@ export function ChatPage() {
                 if (taskId.trim() && agentLocked) {
                     body.agentLocked = true;
                 }
-                const { reply, metadata } = await apiChat(body);
+                const { reply, metadata } = await apiChat(body, {
+                    signal: chatAbortRef.current.signal,
+                    onDelta: (d) => {
+                        setStreamPartial(true);
+                        setMessages((m) => {
+                            const next = [...m];
+                            const last = next[next.length - 1];
+                            if (last?.role === "assistant") {
+                                next[next.length - 1] = { role: "assistant", text: last.text + d };
+                            }
+                            return next;
+                        });
+                    },
+                });
+                setMessages((m) => {
+                    const next = [...m];
+                    const last = next[next.length - 1];
+                    if (last?.role === "assistant") {
+                        next[next.length - 1] = { role: "assistant", text: reply };
+                    }
+                    return next;
+                });
                 const asstMsg: ChatMessage = { role: "assistant", text: reply };
-
-                setMessages((m) => [...m, asstMsg]);
 
                 const ts = taskId.trim();
                 const st = metadata?.taskStatus;
@@ -274,9 +303,18 @@ export function ChatPage() {
             } catch (e) {
                 const msg = e instanceof Error ? e.message : t("chat.errorToken");
                 setError(msg);
-                setMessages((m) => [...m, { role: "assistant", text: `${t("chat.errorPrefix")}${msg}` }]);
+                setMessages((m) => {
+                    const next = [...m];
+                    const last = next[next.length - 1];
+                    if (last?.role === "assistant" && last.text === "") {
+                        next.pop();
+                    }
+                    return [...next, { role: "assistant", text: `${t("chat.errorPrefix")}${msg}` }];
+                });
             } finally {
                 setLoading(false);
+                chatAbortRef.current = null;
+                setStreamPartial(false);
             }
         },
         [
@@ -699,7 +737,15 @@ export function ChatPage() {
                     </details>
 
                     <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-none border-0 bg-transparent p-0 shadow-none">
-                        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">
+                        <div
+                            ref={chatScrollRef}
+                            className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 sm:p-4"
+                            onScroll={(e) => {
+                                const el = e.currentTarget;
+                                const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+                                stickToBottomRef.current = gap < 72;
+                            }}
+                        >
                             {messages.length === 0 && (
                                 <p className="text-center text-sm text-slate-500 dark:text-slate-500">
                                     {hasToken ? t("chat.emptyLoggedIn") : t("chat.emptyGuest")}
@@ -707,7 +753,7 @@ export function ChatPage() {
                             )}
                             {messages.map((m, i) => (
                                 <div
-                                    key={`${i}-${m.role}-${m.text.slice(0, 16)}`}
+                                    key={i}
                                     className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
                                 >
                                     <div
@@ -721,14 +767,13 @@ export function ChatPage() {
                                     </div>
                                 </div>
                             ))}
-                            {loading && (
+                            {loading && !streamPartial && (
                                 <div className="flex justify-start">
                                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500 dark:border-slate-700/80 dark:bg-slate-800/60 dark:text-slate-400">
                                         {t("chat.thinking")}
                                     </div>
                                 </div>
                             )}
-                            <div ref={bottomRef} />
                         </div>
                         {error && (
                             <div className="border-t border-slate-200 px-3 py-2 text-xs text-rose-600 dark:border-slate-800 dark:text-rose-400 sm:px-4">
@@ -757,6 +802,14 @@ export function ChatPage() {
                                 className="resize-none"
                             />
                             <div className="mt-2 flex justify-end gap-2">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={() => chatAbortRef.current?.abort()}
+                                    disabled={!loading}
+                                >
+                                    {t("chat.stop")}
+                                </Button>
                                 <Button type="button" onClick={() => void sendMessage()} disabled={loading}>
                                     {t("chat.send")}
                                 </Button>

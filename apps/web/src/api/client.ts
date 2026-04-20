@@ -80,7 +80,7 @@ export type ChatResponse = {
     metadata?: Record<string, unknown>;
 };
 
-export async function apiChat(body: {
+export type ChatRequestBody = {
     message: string;
     sessionKey?: string;
     agentId?: string;
@@ -89,11 +89,96 @@ export async function apiChat(body: {
     taskId?: string;
     /** 与任务联用时：为 true 则优先使用下方 agentId，不被计划步 assignedAgentId 覆盖 */
     agentLocked?: boolean;
-}): Promise<ChatResponse> {
-    return apiJson<ChatResponse>("/api/chat", {
+};
+
+export type ChatStreamCallbacks = {
+    signal?: AbortSignal;
+    onDelta?: (chunk: string) => void;
+    onSse?: (obj: Record<string, unknown>) => void;
+};
+
+/**
+ * 对话：第二参数传入则走 SSE（stream:true），支持 onDelta 与 AbortSignal。
+ */
+export async function apiChat(body: ChatRequestBody, stream?: ChatStreamCallbacks): Promise<ChatResponse> {
+    if (!stream) {
+        return apiJson<ChatResponse>("/api/chat", {
+            method: "POST",
+            body: JSON.stringify(body),
+        });
+    }
+
+    const res = await fetch("/api/chat", {
         method: "POST",
-        body: JSON.stringify(body),
+        headers: buildHeaders({ body: JSON.stringify({ ...body, stream: true }) }),
+        body: JSON.stringify({ ...body, stream: true }),
+        signal: stream.signal,
     });
+
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(await parseError(res, text));
+    }
+
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/json")) {
+        const text = await res.text();
+        try {
+            const j = JSON.parse(text) as ChatResponse;
+            return { reply: j.reply ?? "", metadata: j.metadata };
+        } catch {
+            throw new Error(text || "无效 JSON");
+        }
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+        throw new Error("响应无流式正文");
+    }
+
+    const decoder = new TextDecoder();
+    let buf = "";
+    let reply = "";
+    let metadata: Record<string, unknown> | undefined;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload) continue;
+            let obj: Record<string, unknown>;
+            try {
+                obj = JSON.parse(payload) as Record<string, unknown>;
+            } catch {
+                continue;
+            }
+            stream.onSse?.(obj);
+            if (obj.type === "delta" && typeof obj.text === "string") {
+                reply += obj.text;
+                stream.onDelta?.(obj.text);
+            }
+            if (obj.type === "final") {
+                if (typeof obj.reply === "string") reply = obj.reply;
+                const meta = obj.metadata;
+                if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+                    metadata = meta as Record<string, unknown>;
+                }
+            }
+            if (obj.type === "error") {
+                const err =
+                    typeof obj.error === "string" ? obj.error : JSON.stringify(obj);
+                throw new Error(err);
+            }
+        }
+    }
+
+    return { reply, metadata };
 }
 
 /** 无 taskId 时高风险工具：在聊天页确认后调用，放行下一次同工具调用 */

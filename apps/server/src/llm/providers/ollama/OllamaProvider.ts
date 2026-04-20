@@ -12,6 +12,7 @@ export type OllamaProviderOptions = Partial<{
     baseUrl: string;
     modelName: string;
     temperature: number;
+    signal?: AbortSignal;
 }>;
 
 export class OllamaProvider implements ModelProvider {
@@ -24,9 +25,13 @@ export class OllamaProvider implements ModelProvider {
 
     async chatWithTools(
         messages: AgentMessage[],
-        tools: ToolSchema[]
+        tools: ToolSchema[],
+        callOpts?: { signal?: AbortSignal; onAssistantTextDelta?: (chunk: string) => void },
     ): Promise<ChatWithToolsResult> {
-        // 现在的函数签名完全匹配
-        return chatWithOllamaWithTools(messages, tools, this.options);
+        void callOpts?.onAssistantTextDelta;
+        return chatWithOllamaWithTools(messages, tools, {
+            ...this.options,
+            signal: callOpts?.signal ?? this.options.signal,
+        });
     }
 }

@@ -69,7 +69,10 @@ export async function chatWithOllama(
     const ollamaMsgs = toOllamaMessages(messages as AgentMessage[]);
     const body = buildOllamaChatRequest(ollamaMsgs as any, { stream: false }, providerOptions);
     const url = `${cfg.baseUrl.replace(/\/$/, "")}/api/chat`;
-    const data = await postJson<OllamaChatResponse>(url, body, { timeoutMs: ollamaConfig.timeout });
+    const data = await postJson<OllamaChatResponse>(url, body, {
+        timeoutMs: ollamaConfig.timeout,
+        signal: providerOptions?.signal,
+    });
     if (data?.error) throw new Error(`Ollama 错误: ${data.error}`);
     return data?.message?.content ?? "";
 }
@@ -112,7 +115,10 @@ export async function chatWithOllamaWithTools(
         tools: ollamaTools,
     };
 
-    const data = await postJson<OllamaChatResponse>(url, body, { timeoutMs: ollamaConfig.timeout });
+    const data = await postJson<OllamaChatResponse>(url, body, {
+        timeoutMs: ollamaConfig.timeout,
+        signal: providerOptions?.signal,
+    });
     
     if (data?.error) {
         throw new Error(`Ollama 工具交互失败: ${data.error}`);

@@ -97,7 +97,8 @@ export async function chatWithZhiPu(
         headers: {
             "Authorization": `Bearer ${apiKey}`,
             "Content-Type": "application/json"
-        }
+        },
+        signal: providerOptions?.signal,
     });
 
     if (data?.error) {
@@ -121,13 +122,142 @@ export function toZhiPuTools(schemas: ToolSchema[]): ZhiPuTool[] {
 }
 
 /**
- * 高级接口：带工具调用的智谱交互
+ * 流式：边收边推送 assistant 文本增量，结束时解析完整 tool_calls（optimize §7 / §9）
  */
+async function chatWithZhiPuWithToolsStream(
+    messages: AgentMessage[],
+    tools: ToolSchema[],
+    providerOptions: ZhiPuProviderOptions,
+): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; id?: string }> }> {
+    const onDelta = providerOptions.onAssistantTextDelta;
+    const validMessages = messages.filter((m: any) => {
+        if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return true;
+        if (m.role === "tool") return true;
+        return typeof m.content === "string" && m.content.trim() !== "";
+    });
+    const baseUrl = providerOptions?.baseUrl?.trim() ? providerOptions.baseUrl.trim() : zhipuConfig.baseUrl;
+    const apiKey = providerOptions?.apiKey?.trim() ? providerOptions.apiKey.trim() : zhipuConfig.apiKey;
+    const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const zhipuMessages = toZhiPuMessages(validMessages);
+    const zhipuTools = toZhiPuTools(tools);
+    const body = {
+        model: providerOptions?.modelName?.trim() ? providerOptions.modelName.trim() : zhipuConfig.modelName,
+        messages: zhipuMessages,
+        tools: zhipuTools,
+        stream: true,
+        temperature: providerOptions?.temperature ?? zhipuConfig.temperature,
+    };
+
+    const controller = new AbortController();
+    const timeoutMs = 120_000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const onUserAbort = (): void => controller.abort();
+    const userSig = providerOptions.signal;
+    if (userSig) {
+        if (userSig.aborted) controller.abort();
+        else userSig.addEventListener("abort", onUserAbort, { once: true });
+    }
+
+    let res: Response;
+    try {
+        res = await fetch(url, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        });
+    } finally {
+        clearTimeout(timeoutId);
+        if (userSig) userSig.removeEventListener("abort", onUserAbort);
+    }
+
+    if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`智谱流式请求失败 ${res.status}: ${errText.slice(0, 500)}`);
+    }
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("智谱流式响应无 body");
+
+    const decoder = new TextDecoder();
+    let buf = "";
+    let contentAcc = "";
+    const toolAgg = new Map<number, { id?: string; name?: string; args: string }>();
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+            const t = line.trim();
+            if (!t.startsWith("data:")) continue;
+            const data = t.slice(5).trim();
+            if (data === "[DONE]") continue;
+            try {
+                const json = JSON.parse(data) as {
+                    choices?: Array<{ delta?: { content?: string; tool_calls?: any[] } }>;
+                };
+                const delta = json.choices?.[0]?.delta;
+                if (delta?.content) {
+                    contentAcc += delta.content;
+                    onDelta?.(delta.content);
+                }
+                if (Array.isArray(delta?.tool_calls)) {
+                    for (const tc of delta.tool_calls) {
+                        const idx = typeof tc.index === "number" ? tc.index : 0;
+                        let slot = toolAgg.get(idx);
+                        if (!slot) {
+                            slot = { args: "" };
+                            toolAgg.set(idx, slot);
+                        }
+                        if (tc.id) slot.id = String(tc.id);
+                        if (tc.function?.name) slot.name = String(tc.function.name);
+                        if (tc.function?.arguments != null) {
+                            slot.args += String(tc.function.arguments);
+                        }
+                    }
+                }
+            } catch {
+                /* 跳过畸形 chunk */
+            }
+        }
+    }
+
+    const toolCalls = [...toolAgg.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, v]) => {
+            let args: Record<string, unknown> = {};
+            const raw = v.args?.trim() ?? "";
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    args =
+                        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                            ? (parsed as Record<string, unknown>)
+                            : {};
+                } catch {
+                    args = {};
+                }
+            }
+            return { name: v.name ?? "", args, id: v.id };
+        })
+        .filter((tc) => tc.name);
+
+    return { content: contentAcc, toolCalls };
+}
+
 export async function chatWithZhiPuWithTools(
     messages: AgentMessage[],
     tools: ToolSchema[],
     providerOptions?: ZhiPuProviderOptions,
 ): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; id?: string }> }> {
+    if (providerOptions?.onAssistantTextDelta) {
+        return chatWithZhiPuWithToolsStream(messages, tools, providerOptions);
+    }
     // 注意：assistant 可能只发 tool_calls 而 content 为空；tool 也可能 content 很短。
     // 不能简单按 content 过滤，否则会破坏 tool_calls/结果配对。
     const validMessages = messages.filter((m: any) => {
@@ -155,7 +285,8 @@ export async function chatWithZhiPuWithTools(
         timeoutMs: 120_000,
         headers: {
             "Authorization": `Bearer ${apiKey}`
-        }
+        },
+        signal: providerOptions?.signal,
     });
 
     if (data?.error) {

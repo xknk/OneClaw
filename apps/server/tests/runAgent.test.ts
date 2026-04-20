@@ -7,6 +7,7 @@ import { ToolPolicyError } from "@/tasks/stepToolPolicy";
 // 1. 【模拟模型层】：模拟 chatWithModelWithTools 函数，避免测试时产生真实的 API 开销
 vi.mock("@/llm/model", () => ({
     chatWithModelWithTools: vi.fn(),
+    resolveFallbackModelKey: vi.fn(() => null),
 }));
 
 // 2. 【模拟工具层】：扩展现有的工具库，专门为测试注入一些“特殊行为”的工具

@@ -63,7 +63,11 @@ export interface ModelProvider {
 
     /**
      * 可选：带工具的一轮对话。未实现的 Provider 可不定义或抛错。
-     * 换模型时只需新 Provider 实现此方法，Agent 无需改动。
+     * callOpts：signal 取消请求；onAssistantTextDelta 流式正文增量（智谱等实现）。
      */
-    chatWithTools?(messages: AgentMessage[], tools: ToolSchema[]): Promise<ChatWithToolsResult>;
+    chatWithTools?(
+        messages: AgentMessage[],
+        tools: ToolSchema[],
+        callOpts?: { signal?: AbortSignal; onAssistantTextDelta?: (chunk: string) => void },
+    ): Promise<ChatWithToolsResult>;
 }

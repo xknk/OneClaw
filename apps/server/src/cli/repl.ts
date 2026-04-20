@@ -6,6 +6,7 @@ import { handleUnifiedChat } from "@/server/chatProcessing";
 import { appConfig } from "@/config/evn";
 import { getSlashCommandEntries } from "@/cli/slashCommands";
 import { runTerminalSlash } from "@/cli/terminalCommandRunner";
+import { newCliConversationSessionKey } from "@/cli/cliSessionKey";
 import * as T from "@/tui/tuiStrings";
 
 export interface ReplOptions {
@@ -53,7 +54,7 @@ function printStatus(opts: {
  */
 export async function runRepl(opts: ReplOptions = {}): Promise<void> {
     const state = {
-        sessionKey: opts.sessionKey?.trim() || "cli",
+        sessionKey: opts.sessionKey?.trim() || newCliConversationSessionKey(),
         agentId: opts.agentId?.trim() || undefined,
         taskId: opts.taskId?.trim() || undefined,
         verbose: !!opts.verbose,

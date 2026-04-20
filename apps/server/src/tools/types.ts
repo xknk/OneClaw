@@ -33,6 +33,8 @@ export interface ToolExecutionContext {
     agentId: string;      // 执行该工具的智能体实例 ID
     profileId: string;    // 当前操作的用户画像/账号 ID
     taskId?: string; // 关联任务（含 taskId 的 WebChat 等）
+    /** 用户中止对话 / 断开连接时触发，用于取消 LLM 请求与子进程 */
+    abortSignal?: AbortSignal;
 }
 
 /**

@@ -6,6 +6,8 @@ import { HttpError } from "./error";
 export type HttpClientOptions = {
     timeoutMs?: number;
     headers?: Record<string, string>;
+    /** 与内部超时合并；任一触发则中止请求 */
+    signal?: AbortSignal;
 };
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -18,10 +20,19 @@ export async function postJson<T>(
     body: unknown,
     options: HttpClientOptions = {}
 ): Promise<T> {
-    const { timeoutMs = DEFAULT_TIMEOUT_MS, headers: extraHeaders = {} } = options;
+    const { timeoutMs = DEFAULT_TIMEOUT_MS, headers: extraHeaders = {}, signal: userSignal } = options;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const onUserAbort = (): void => controller.abort();
+    let userHooked = false;
+    if (userSignal) {
+        if (userSignal.aborted) controller.abort();
+        else {
+            userSignal.addEventListener("abort", onUserAbort, { once: true });
+            userHooked = true;
+        }
+    }
 
     try {
         const res = await fetch(url, {
@@ -58,5 +69,6 @@ export async function postJson<T>(
         throw new HttpError(`网络请求失败：${(err as Error).message}`, 0, url);
     } finally {
         clearTimeout(timeoutId);
+        if (userHooked) userSignal?.removeEventListener("abort", onUserAbort);
     }
 }

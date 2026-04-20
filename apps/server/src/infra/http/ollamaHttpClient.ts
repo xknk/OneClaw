@@ -6,6 +6,7 @@ import { HttpError } from "./error";
 export type HttpClientOptions = {
     timeoutMs?: number; // 超时时间（毫秒）
     headers?: Record<string, string>; // 自定义请求头
+    signal?: AbortSignal;
 };
 
 const DEFAULT_TIMEOUT_MS = 60_000; // 默认超时：60秒
@@ -21,11 +22,20 @@ export async function postJson<T>(
     body: unknown,
     options: HttpClientOptions = {}
 ): Promise<T> {
-    const { timeoutMs = DEFAULT_TIMEOUT_MS, headers: extraHeaders = {} } = options;
+    const { timeoutMs = DEFAULT_TIMEOUT_MS, headers: extraHeaders = {}, signal: userSignal } = options;
 
     // --- 1. 超时控制器设置 ---
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const onUserAbort = (): void => controller.abort();
+    let userHooked = false;
+    if (userSignal) {
+        if (userSignal.aborted) controller.abort();
+        else {
+            userSignal.addEventListener("abort", onUserAbort, { once: true });
+            userHooked = true;
+        }
+    }
 
     try {
         // --- 2. 发起请求 ---
@@ -91,5 +101,6 @@ export async function postJson<T>(
         // --- 8. 清理工作 ---
         // 无论成功还是失败，都必须清除定时器，防止 Node.js 进程无法退出
         clearTimeout(timeoutId);
+        if (userHooked) userSignal?.removeEventListener("abort", onUserAbort);
     }
 }

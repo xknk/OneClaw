@@ -57,6 +57,13 @@ import {
  * 不同的渠道（Web/QQ）会传入不同的实现来完成消息回传
  */
 type OutboundSender = (outbound: UnifiedOutboundMessage) => Promise<void>;
+
+/** Web 流式 / 中止 等扩展（optimize §4 §7） */
+export type UnifiedChatHandlerOptions = {
+    abortSignal?: AbortSignal;
+    sseWrite?: (obj: Record<string, unknown>) => void;
+};
+
 export const DEFAULT_SESSION_KEY: SessionKey = "main";
 /**
  * 辅助函数：从统一消息体中提取会话标识
@@ -139,7 +146,8 @@ async function failTaskAfterChatError(
  */
 export async function handleUnifiedChat(
     inbound: UnifiedInboundMessage,
-    sendOutbound: OutboundSender
+    sendOutbound: OutboundSender,
+    handlerOpts?: UnifiedChatHandlerOptions,
 ): Promise<void> {
     // --- 1. 基础上下文解析 ---
     const traceId = crypto.randomUUID(); // 全链路追踪 ID
@@ -288,6 +296,7 @@ export async function handleUnifiedChat(
         agentId,
         profileId,
         taskId,
+        abortSignal: handlerOpts?.abortSignal,
     };
     const execService = new ToolExecutionService({
         registry,
@@ -331,6 +340,22 @@ export async function handleUnifiedChat(
     let toolSchemas = await execService.getToolSchemas();
     toolSchemas = filterSchemasByAllowlist(toolSchemas, allow);
 
+    const resolvedForPolicy = await registry.listResolved(toolExecutionCtx, { health: providerHealth });
+    const parallelSafeNames = new Set(
+        resolvedForPolicy
+            .filter((r) => r.definition.riskLevel === "low")
+            .map((r) => r.definition.name),
+    );
+    const mcpToolNames = new Set(
+        resolvedForPolicy
+            .filter((r) => r.definition.source === "mcp")
+            .map((r) => r.definition.name),
+    );
+    const toolSchemasSlim =
+        appConfig.chatDeferMcpToolsToRound2
+            ? toolSchemas.filter((s) => !mcpToolNames.has(s.name))
+            : toolSchemas;
+
     // --- 6. 核心推理循环 (The Run Loop) ---
     let replyText = "";
     try {
@@ -339,6 +364,22 @@ export async function handleUnifiedChat(
             toolSchemas,
             // modelId 优先；否则退回老字段 modelType
             modelType: (inbound.modelId?.trim() ? inbound.modelId.trim() : (inbound.modelType ?? "zhipu")) as any,
+            toolParallelSafe: (name) => parallelSafeNames.has(name),
+            resolveToolSchemas: (toolRound) => (toolRound <= 1 ? toolSchemasSlim : toolSchemas),
+            abortSignal: handlerOpts?.abortSignal,
+            onAssistantTextDelta: handlerOpts?.sseWrite
+                ? (chunk) => {
+                      if (chunk) handlerOpts.sseWrite!({ type: "delta", text: chunk });
+                  }
+                : undefined,
+            onToolCallFinished: async (ev) => {
+                handlerOpts?.sseWrite?.({
+                    type: "tool",
+                    toolName: ev.toolName,
+                    ok: ev.ok,
+                    durationMs: ev.durationMs,
+                });
+            },
             executeTool: async (toolName, args) => {
                 const resolved = await registry.resolveByName(toolName, toolExecutionCtx, {
                     health: providerHealth,
@@ -383,11 +424,10 @@ export async function handleUnifiedChat(
                 if (blocked) return blocked;
                 return execService.execute(toolName, args);
             },
-            onModelEvent: (e) => emitTrace(
-                traceBase,
-                e.type,
-                { meta: e }
-            ),
+            onModelEvent: async (e) => {
+                await emitTrace(traceBase, e.type, { meta: e });
+                handlerOpts?.sseWrite?.({ type: "model", event: e });
+            },
         });
 
         // --- 7. 响应与任务反馈 ---

@@ -82,21 +82,71 @@ export function createServer() {
      * 将网页发送的消息转为统一格式并进入 handleUnifiedChat 流程
      */
     app.post("/api/chat", async (req, res) => {
+        const ac = new AbortController();
+        // 勿监听 req「close」：在 Node 中 body 读完后常会触发，并非客户端断开，会误杀进行中的 LLM。
+        const onAbort = (): void => {
+            if (!res.writableEnded) ac.abort();
+        };
+        req.on("aborted", onAbort);
+        let sseStarted = false;
         try {
             const inbound = webChatChannelAdapter.parseInbound(req.body);
             if (!inbound) {
                 res.status(400).json({ error: "无效的请求体，需包含 message（字符串）" });
                 return;
             }
-            // 网页端直接通过 HTTP Response 返回结果
-            await handleUnifiedChat(inbound, (outbound) =>
-                webChatChannelAdapter.sendOutbound(res, outbound)
-            );
+            const raw = req.body as { stream?: unknown };
+            const wantStream =
+                appConfig.chatSseEnabled === true && raw?.stream === true;
+
+            if (wantStream) {
+                sseStarted = true;
+                res.status(200);
+                res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+                res.setHeader("Cache-Control", "no-cache, no-transform");
+                res.setHeader("Connection", "keep-alive");
+                if (typeof (res as { flushHeaders?: () => void }).flushHeaders === "function") {
+                    (res as { flushHeaders: () => void }).flushHeaders();
+                }
+                const sseWrite = (obj: Record<string, unknown>): void => {
+                    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+                };
+                await handleUnifiedChat(
+                    inbound,
+                    async (outbound) => {
+                        sseWrite({
+                            type: "final",
+                            reply: outbound.text,
+                            metadata: outbound.metadata ?? {},
+                        });
+                        res.end();
+                    },
+                    { abortSignal: ac.signal, sseWrite },
+                );
+            } else {
+                await handleUnifiedChat(
+                    inbound,
+                    (outbound) => webChatChannelAdapter.sendOutbound(res, outbound),
+                    { abortSignal: ac.signal },
+                );
+            }
         } catch (err) {
             console.error("/api/chat 错误:", redactForLog(err));
-            res.status(500).json({
-                error: err instanceof Error ? err.message : "服务器内部错误",
-            });
+            const msg = err instanceof Error ? err.message : "服务器内部错误";
+            if (sseStarted && !res.writableEnded) {
+                try {
+                    res.write(
+                        `data: ${JSON.stringify({ type: "error", error: msg })}\n\n`,
+                    );
+                    res.end();
+                } catch {
+                    /* ignore */
+                }
+            } else if (!res.headersSent) {
+                res.status(500).json({ error: msg });
+            }
+        } finally {
+            req.off("aborted", onAbort);
         }
     });
 
@@ -170,6 +220,11 @@ export function createServer() {
 
         // 启动异步处理闭包，不阻塞主接口返回
         (async () => {
+            const ac = new AbortController();
+            const onAbort = (): void => {
+                if (!res.writableEnded) ac.abort();
+            };
+            req.on("aborted", onAbort);
             try {
                 const inbound = qqChannelAdapter.parseInbound(req.body);
                 if (!inbound) return;
@@ -190,12 +245,16 @@ export function createServer() {
                     sendMessage: (content) => sendOneBotMessage(ctx, content),
                 };
 
-                // 进入统一处理流程，回复逻辑由 qqChannelAdapter 提供
-                await handleUnifiedChat(inbound, (outbound) =>
-                    qqChannelAdapter.sendOutbound(ctx, outbound)
+                // 与 /api/chat 一致传入 abortSignal（此处响应已结束，writableEnded 为 true，不会因 req 误杀）
+                await handleUnifiedChat(
+                    inbound,
+                    (outbound) => qqChannelAdapter.sendOutbound(ctx, outbound),
+                    { abortSignal: ac.signal },
                 );
             } catch (err) {
                 console.error("/api/qq/webhook 异步处理错误:", redactForLog(err));
+            } finally {
+                req.off("aborted", onAbort);
             }
         })();
     });

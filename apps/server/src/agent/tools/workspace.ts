@@ -7,6 +7,7 @@ import fs from "fs/promises";
 import path from "path";
 import type { Dirent } from "fs";
 import { appConfig } from "../../config/evn";
+import { FileContentLru } from "../../infra/fileContentLru";
 import {
     assertPathOperationAllowed,
     ensureFileAccessPolicyReady,
@@ -14,6 +15,14 @@ import {
     getFileAccessRoots as getPolicyRoots,
     isPathGloballyAllowed,
 } from "../../config/fileAccessPolicy";
+
+let readFileContentLru: FileContentLru | null = null;
+function getReadFileLru(): FileContentLru {
+    if (!readFileContentLru) {
+        readFileContentLru = new FileContentLru(appConfig.readFileLruMaxEntries);
+    }
+    return readFileContentLru;
+}
 
 /**
  * 获取主 workspace 绝对根路径（相对路径仍解析到此根下）
@@ -67,7 +76,12 @@ export async function readFileInWorkspace(relativePath: string): Promise<string>
     if (!stat.isFile()) {
         throw new Error(`不是文件: ${relativePath}`);
     }
-    return fs.readFile(fullPath, "utf-8");
+    const cacheKey = `${fullPath}:${stat.mtimeMs}`;
+    const hit = getReadFileLru().get(cacheKey);
+    if (hit !== undefined) return hit;
+    const content = await fs.readFile(fullPath, "utf-8");
+    getReadFileLru().set(cacheKey, content);
+    return content;
 }
 
 /**

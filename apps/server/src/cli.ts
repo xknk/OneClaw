@@ -10,6 +10,7 @@ import { runDoctor } from "./cli/doctor";
 import { runStart } from "./cli/start";
 import { registerTraceCommands } from "./cli/trace";
 import { registerTaskCommands } from "./cli/task";
+import { newCliConversationSessionKey } from "./cli/cliSessionKey";
 import { runRepl } from "./cli/repl";
 import { runTuiCli } from "./tui/runTui";
 import { registerModelCommands } from "./cli/models";
@@ -55,13 +56,13 @@ program
 
 终端对话（无需 HTTP）:
   pnpm cli repl
-  pnpm cli repl --session mychat -v
-  （REPL 内行首 / + Tab 可补全命令）
+  pnpm cli repl --session mychat -v   # 续聊同一会话时指定 sessionKey
+  （每次启动未带 --session 时自动新建会话 cli-<uuid>；REPL 内 / + Tab）
 
 TUI（WebSocket + 终端界面，需较大终端窗口）:
   pnpm cli                    无子命令时默认进入 TUI
   pnpm cli tui
-  pnpm cli tui -p 18789 --session cli
+  pnpm cli tui -p 18789 --session mychat
 
 全局命令（仓库根执行 pnpm link --global 且 PATH 含 PNPM_HOME 后）:
   oneclaw                     默认 TUI
@@ -92,7 +93,7 @@ program
 program
     .command("repl")
     .description("终端对话（复用 handleUnifiedChat，无需启动 HTTP）")
-    .option("--session <key>", "会话键", "cli")
+    .option("--session <key>", "会话键；省略则每次启动自动新建对话（cli-<uuid>）")
     .option("--agent <id>", "Agent ID")
     .option("--task <taskId>", "关联任务 ID")
     .option("-v, --verbose", "打印 metadata（如 traceId）", false)
@@ -104,7 +105,7 @@ program
             verbose?: boolean;
         }) => {
             await runRepl({
-                sessionKey: opts.session,
+                sessionKey: opts.session?.trim() || newCliConversationSessionKey(),
                 agentId: opts.agent,
                 taskId: opts.task,
                 verbose: !!opts.verbose,
@@ -116,7 +117,7 @@ program
     .command("tui")
     .description("终端图形界面（本机 WebSocket + Ink，与 REPL 同对话链）")
     .option("-p, --port <n>", "WebSocket 端口（默认 18789 或 ONECLAW_TUI_WS_PORT）")
-    .option("--session <key>", "会话键", "cli")
+    .option("--session <key>", "会话键；省略则每次启动自动新建对话（cli-<uuid>）")
     .option("--agent <id>", "Agent ID")
     .option("--task <taskId>", "任务 ID")
     .action(
@@ -133,7 +134,7 @@ program
             }
             await runTuiCli({
                 port,
-                session: opts.session,
+                session: opts.session?.trim() || newCliConversationSessionKey(),
                 agent: opts.agent,
                 task: opts.task,
             });

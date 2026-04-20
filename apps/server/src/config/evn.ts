@@ -168,6 +168,18 @@ export const appConfig = {
      */
     chatRollingPrefetchEnabled: bool("ONECLAW_ROLLING_PREFETCH_ENABLED", true),
 
+    /** 首轮流式输出：Web 传 stream:true 且模型支持时，SSE 推送 assistant 增量（optimize §7） */
+    chatSseEnabled: bool("ONECLAW_CHAT_SSE_ENABLED", true),
+    /** ReAct 第一轮不传 MCP 工具，第二轮起再注入，减首包体积（optimize §5） */
+    chatDeferMcpToolsToRound2: bool("ONECLAW_CHAT_DEFER_MCP_TOOLS", true),
+    /** read_file 内存 LRU 条数（按「路径+mtime」键） */
+    readFileLruMaxEntries: num("ONECLAW_READ_FILE_LRU_MAX_ENTRIES", 256),
+    /** 工具返回超过此字符数则头尾采样折叠（0 表示关闭） */
+    toolResultSampleMinChars: num("ONECLAW_TOOL_RESULT_SAMPLE_MIN_CHARS", 24_000),
+    toolResultSampleHeadChars: num("ONECLAW_TOOL_RESULT_SAMPLE_HEAD_CHARS", 12_000),
+    toolResultSampleTailChars: num("ONECLAW_TOOL_RESULT_SAMPLE_TAIL_CHARS", 8_000),
+    /** 主模型失败时回退的模型 id（与 models.json 对齐；空则关闭） */
+    fallbackModelId: str("ONECLAW_FALLBACK_MODEL_ID", ""),
 } as const;
 
 export const PORT = num("PORT", 3000);
