@@ -88,12 +88,22 @@ function foldObsoleteToolMessages(messages: ChatMessage[], keepLastN = 3): ChatM
                     ...msg,
                     tool_calls: calls.map(tc => {
                         if (tc.id && idsToFold.has(tc.id)) {
+                            // 兼容两种常见形状：
+                            // 1) OpenAI: { id, type:"function", function:{ name, arguments } }
+                            // 2) 业务层: { id, name, args }
+                            const hasFunctionShape = tc.function && typeof tc.function === "object";
                             return {
                                 ...tc,
-                                function: {
-                                    ...tc.function,
-                                    arguments: "{}" // 成功折叠参数
-                                }
+                                ...(hasFunctionShape
+                                    ? {
+                                          function: {
+                                              ...tc.function,
+                                              arguments: "{}",
+                                          },
+                                      }
+                                    : {
+                                          args: {},
+                                      }),
                             };
                         }
                         return tc;

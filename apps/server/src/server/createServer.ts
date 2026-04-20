@@ -22,6 +22,7 @@ import { isBotMentioned } from "@/channels/qq/isBotMentioned";
 import { handleUnifiedChat, DEFAULT_SESSION_KEY } from "./chatProcessing";
 import { registerTaskRoutes } from "./taskRoutes";
 import { registerWorkspaceRoutes } from "./workspaceRoutes";
+import { listModelsForClient } from "@/llm/modelCatalog";
 
 /**
  * 解析已构建的前端静态目录（apps/web/dist），可通过 ONECLAW_WEB_DIST 覆盖。
@@ -61,6 +62,8 @@ export function createServer() {
     app.use((req, res, next) => {
         if (req.path.startsWith("/api/qq")) return next();
         if (req.path.startsWith("/api/auth")) return next();
+        // 前端启动/访客模式下也需要读取模型列表以供选择
+        if (req.path.startsWith("/api/models")) return next();
         return webchatAuth(req, res, next);
     });
 
@@ -93,6 +96,18 @@ export function createServer() {
             res.status(500).json({
                 error: err instanceof Error ? err.message : "服务器内部错误",
             });
+        }
+    });
+
+    /**
+     * 公开：模型列表（前端下拉框用）。不返回 apiKey 等敏感字段。
+     */
+    app.get("/api/models", (_req, res) => {
+        try {
+            res.json(listModelsForClient());
+        } catch (err) {
+            console.error("/api/models:", redactForLog(err));
+            res.status(500).json({ error: err instanceof Error ? err.message : "服务器内部错误" });
         }
     });
 

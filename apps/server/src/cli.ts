@@ -12,6 +12,7 @@ import { registerTraceCommands } from "./cli/trace";
 import { registerTaskCommands } from "./cli/task";
 import { runRepl } from "./cli/repl";
 import { runTuiCli } from "./tui/runTui";
+import { registerModelCommands } from "./cli/models";
 
 /**
  * 去掉 `tsx src/cli.ts` 等注入的脚本路径，仅保留用户真正传入的参数。
@@ -141,6 +142,7 @@ program
 
 registerTraceCommands(program);
 registerTaskCommands(program);
+registerModelCommands(program);
 
 // 解析命令行参数（这行最重要，不写它程序就没反应）
 program.parse();

@@ -6,6 +6,7 @@ import { useLocale } from "@/locale/LocaleContext";
 import {
     apiChat,
     apiListTasks,
+    apiModels,
     apiSessionReset,
     apiWorkspaceAgentsGet,
     apiWorkspaceSessionDelete,
@@ -25,6 +26,7 @@ export function ChatPage() {
     const [userId, setUserId] = useState<string | null>(null);
 
     const [agentId, setAgentId] = useState("main");
+    const [modelId, setModelId] = useState("");
     const [intent, setIntent] = useState("");
     const [taskId, setTaskId] = useState("");
     const [agentLocked, setAgentLocked] = useState(false);
@@ -34,6 +36,8 @@ export function ChatPage() {
     const [error, setError] = useState<string | null>(null);
     const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
     const [agentOptions, setAgentOptions] = useState<{ id: string; label: string }[]>([]);
+    const [modelOptions, setModelOptions] = useState<{ id: string; label: string }[]>([]);
+    const [defaultModelId, setDefaultModelId] = useState<string>("");
     const [recentTasks, setRecentTasks] = useState<{ taskId: string; title: string }[]>([]);
     const bottomRef = useRef<HTMLDivElement>(null);
     const prevActiveId = useRef<string | null>(null);
@@ -60,6 +64,18 @@ export function ChatPage() {
                 if (!cancelled) setAgentOptions(list.length > 0 ? list : fallbackAgentOptions());
             } catch {
                 if (!cancelled) setAgentOptions(fallbackAgentOptions());
+            }
+            try {
+                const m = await apiModels();
+                if (!cancelled) {
+                    setDefaultModelId(m.defaultModelId);
+                    setModelOptions(m.models.map((x) => ({ id: x.id, label: x.label })));
+                }
+            } catch {
+                if (!cancelled) {
+                    setDefaultModelId("");
+                    setModelOptions([]);
+                }
             }
             try {
                 const { tasks } = await apiListTasks({ limit: 40 });
@@ -107,6 +123,7 @@ export function ChatPage() {
             setActiveId(first.id);
             setMessages(first.messages);
             setAgentId(first.agentId);
+            setModelId(first.modelId ?? "");
             setIntent(first.intent);
             setTaskId(first.taskId);
             setAgentLocked(Boolean(first.agentLocked));
@@ -129,6 +146,7 @@ export function ChatPage() {
         }
         setMessages(c.messages);
         setAgentId(c.agentId);
+        setModelId(c.modelId ?? "");
         setIntent(c.intent);
         setTaskId(c.taskId);
         setAgentLocked(Boolean(c.agentLocked));
@@ -191,6 +209,9 @@ export function ChatPage() {
                 sessionKey: sk,
                 agentId: aid,
             };
+            if (modelId.trim()) {
+                body.modelId = modelId.trim();
+            }
             if (intent.trim()) {
                 body.intent = intent.trim();
             }
@@ -221,6 +242,7 @@ export function ChatPage() {
                         messages: mergedMsgs,
                         title,
                         agentId: aid,
+                        modelId: modelId.trim(),
                         intent: intent.trim(),
                         taskId: taskId.trim(),
                         agentLocked,
@@ -376,6 +398,12 @@ export function ChatPage() {
             patchActive({ agentId: v });
         }
     };
+    const patchModel = (v: string) => {
+        setModelId(v);
+        if (hasToken && activeId) {
+            patchActive({ modelId: v });
+        }
+    };
     const patchIntent = (v: string) => {
         setIntent(v);
         if (hasToken && activeId) {
@@ -481,6 +509,21 @@ export function ChatPage() {
                                         placeholder="main"
                                     />
                                 )}
+                            </label>
+                            <label className="block text-[11px] text-slate-600 dark:text-slate-400">
+                                {t("chat.modelLabel")}
+                                <Select
+                                    className="mt-1"
+                                    value={modelId.trim() || ""}
+                                    onChange={(e) => patchModel(e.target.value)}
+                                >
+                                    <option value="">{t("chat.modelDefault")}{defaultModelId ? ` — ${defaultModelId}` : ""}</option>
+                                    {modelOptions.map((m) => (
+                                        <option key={m.id} value={m.id}>
+                                            {m.label}
+                                        </option>
+                                    ))}
+                                </Select>
                             </label>
                             <label className="block text-[11px] text-slate-600 dark:text-slate-400">
                                 {t("chat.intentOpt")}

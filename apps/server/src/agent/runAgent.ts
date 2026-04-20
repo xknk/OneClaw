@@ -94,6 +94,8 @@ export interface RunAgentOptions {
               }
             | { type: "llm.error"; round: number; error: string }
     ) => Promise<void> | void;
+    /** 本轮对话使用的模型（既可传 driver：ollama/zhipu，也可传可配置的 modelId） */
+    modelType?: string;
 }
 
 /**
@@ -119,6 +121,7 @@ export async function runAgent(
 ): Promise<string> {
     const maxRounds = options?.maxToolRounds ?? MAX_TOOL_ROUNDS;
     let toolSchemas = options?.toolSchemas ?? getToolSchemas();
+    const modelType = options?.modelType?.trim() ? options.modelType.trim() : "zhipu";
 
     const agentMessages: AgentMessage[] = [...messages];
     let round = 0;
@@ -142,7 +145,7 @@ export async function runAgent(
         let toolCalls: ChatWithToolsResult["toolCalls"];
         
         try {
-            const r = await chatWithModelWithTools(agentMessages, toolSchemas);
+            const r = await chatWithModelWithTools(agentMessages, toolSchemas, modelType);
             content = r.content;
             toolCalls = r.toolCalls;
         } catch (err) {
@@ -163,25 +166,39 @@ export async function runAgent(
 
         if (toolCalls.length === 0) return content || lastContent;
 
+        // 规范化 toolCall id：确保 assistant.tool_calls 与 tool.tool_call_id 一致
+        const normalizedToolCalls = toolCalls.map((tc, idx) => ({
+            ...tc,
+            id: (tc.id && String(tc.id).trim())
+                ? String(tc.id).trim()
+                : `call_${Date.now()}_${round}_${idx}`,
+        }));
+
         // 2. 记录助手意图
         agentMessages.push({
             role: "assistant",
             content,
-            tool_calls: toolCalls.map((tc) => ({ id: tc.id ?? "", name: tc.name, args: tc.args })),
+            tool_calls: normalizedToolCalls.map((tc) => ({
+                id: tc.id!,
+                name: tc.name,
+                args: tc.args,
+            })),
         });
 
         // 3. 决定执行策略：检查是否本轮所有工具都在并行白名单内
-        const canParallel = toolCalls.length > 1 && toolCalls.every(call => PARALLEL_TOOL_WHITELIST.has(call.name));
+        const canParallel =
+            normalizedToolCalls.length > 1 &&
+            normalizedToolCalls.every((call) => PARALLEL_TOOL_WHITELIST.has(call.name));
 
         if (canParallel) {
             // --- 并行执行模式 ---
             const results = await Promise.all(
-                toolCalls.map(call => executeAndRecordTool(call, options))
+                normalizedToolCalls.map((call) => executeAndRecordTool(call, options))
             );
             agentMessages.push(...results);
         } else {
             // --- 串行执行模式 (含敏感操作如 apply_patch, exec) ---
-            for (const call of toolCalls) {
+            for (const call of normalizedToolCalls) {
                 const result = await executeAndRecordTool(call, options);
                 agentMessages.push(result);
             }
@@ -224,7 +241,7 @@ async function executeAndRecordTool(
         role: "tool",
         tool_name: call.name,
         content: result,
-        tool_call_id: call.id, // 确保 ID 传递正确
+        tool_call_id: String(call.id ?? ""), // 确保 ID 传递正确（与 assistant.tool_calls 对齐）
     };
 }
 

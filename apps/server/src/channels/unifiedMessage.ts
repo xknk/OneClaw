@@ -58,6 +58,10 @@ export interface UnifiedInboundMessage {
      * 模型类型：ollama 或 zhipu
      */
     modelType?: "ollama" | "zhipu";
+    /**
+     * 模型 ID：前端可选的配置化模型标识（优先级高于 modelType）
+     */
+    modelId?: string;
 }
 
 /**
@@ -96,6 +100,8 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
         taskId?: unknown; //任务关联ID
         decisionSource?: unknown;
         agentLocked?: unknown;
+        modelType?: unknown;
+        modelId?: unknown;
     };
 
     // 2. 核心字段校验：消息内容必须是字符串
@@ -133,6 +139,8 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
 
     const decisionSource = parseDecisionSourceFromBody(anyBody.decisionSource);
     const agentLocked = anyBody.agentLocked === true;
+    const modelType = anyBody.modelType === "ollama" || anyBody.modelType === "zhipu" ? anyBody.modelType : undefined;
+    const modelId = typeof anyBody.modelId === "string" && anyBody.modelId.trim() !== "" ? anyBody.modelId.trim() : undefined;
 
     // 7. 组装并返回标准结构
     return {
@@ -144,6 +152,8 @@ export function createInboundFromWebChatBody(body: unknown): UnifiedInboundMessa
         agentId,
         intent,
         taskId,
+        ...(modelType ? { modelType } : {}),
+        ...(modelId ? { modelId } : {}),
         ...(decisionSource ? { decisionSource } : {}),
         ...(agentLocked ? { agentLocked: true } : {}),
     };

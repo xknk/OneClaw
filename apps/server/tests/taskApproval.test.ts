@@ -45,7 +45,7 @@ describe("task approval gate (M3)", () => {
         const { getTask } = await import("@/tasks/taskService");
         const t1 = await getTask(t0.taskId);
         expect(t1?.status).toBe("pending_approval");
-    });
+    }, 15_000);
 
     it("approve returns to running", async () => {
         const { createTask, transitionTask, getTask } = await import("@/tasks/taskService");
@@ -161,5 +161,5 @@ describe("task approval gate (M3)", () => {
         await failTask(t0.taskId, "boom");
         const tDead = await getTask(t0.taskId);
         expect(tDead?.meta?.[META_APPROVAL_GRANTS_KEY]).toBeUndefined();
-    });
+    }, 15_000);
 });

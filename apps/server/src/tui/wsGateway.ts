@@ -27,6 +27,7 @@ function parseClientMessage(raw: RawData): {
 } | null {
     try {
         return JSON.parse(String(raw)) as {
+            modelType?: "ollama" | "zhipu";
             type?: string;
             text?: string;
             requestId?: string;
@@ -99,7 +100,8 @@ export async function startTuiWsServer(port: number): Promise<{
                         ...(typeof body.taskId === "string" && body.taskId.trim()
                             ? { taskId: body.taskId.trim() }
                             : {}),
-                        modelType: currentModelType,                     };
+                        ...(currentModelType ? { modelType: currentModelType } : {}),
+                    };
 
                     try {
                         await handleUnifiedChat(inbound, async (outbound) => {

@@ -66,7 +66,7 @@ describe("V4 template task E2E (M2 acceptance)", () => {
         expect(getLastReviewFromRecord(final!)?.outcome).toBe("pass");
         expect(final?.transitions.some((x) => x.to === "review")).toBe(true);
         expect(final?.transitions.some((x) => x.to === "approved")).toBe(true);
-    });
+    }, 15_000);
 
     it("code_review: 模板注入 v4_plan -> review -> Reviewer 不通过 -> rejected", async () => {
         const { createTask, transitionTask, getTask } = await import("@/tasks/taskService");

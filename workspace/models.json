@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "defaultModelId": "zhipu",
+  "models": [
+    {
+      "id": "zhipu",
+      "label": "智谱 GLM（线上）",
+      "driver": "zhipu",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "modelName": "glm-4.5",
+      "apiKeyEnv": "ZHIPU_API_KEY",
+      "supportsTools": true,
+      "temperature": 0.6
+    },
+    {
+      "id": "ollama-local",
+      "label": "Ollama 本地（qwen2.5）",
+      "driver": "ollama",
+      "baseUrl": "http://127.0.0.1:11434",
+      "modelName": "qwen2.5:7b",
+      "supportsTools": true,
+      "temperature": 0.3
+    }
+  ]
+}
+

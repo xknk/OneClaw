@@ -7,6 +7,8 @@ import {
     apiWorkspaceMcpPut,
     apiWorkspaceTaskTemplatesGet,
     apiWorkspaceTaskTemplatesPut,
+    apiWorkspaceModelsGet,
+    apiWorkspaceModelsPut,
     apiWorkspaceSkillsList,
     apiWorkspaceSkillGet,
     apiWorkspaceSkillPut,
@@ -25,6 +27,7 @@ export function WorkspacePage() {
     const [error, setError] = useState<string | null>(null);
     const [ok, setOk] = useState<string | null>(null);
     const [pathsText, setPathsText] = useState("");
+    const [pathsObj, setPathsObj] = useState<{ modelsFile?: string } | null>(null);
     const [fileAccessJson, setFileAccessJson] = useState(
         '{\n  "extraRoots": [],\n  "deniedPrefixes": [],\n  "pathRules": [],\n  "defaultAccess": "full"\n}\n',
     );
@@ -32,6 +35,10 @@ export function WorkspacePage() {
 
     const [mcpJson, setMcpJson] = useState("[]");
     const [tplJson, setTplJson] = useState("[]");
+    const [modelsJson, setModelsJson] = useState(
+        '{\n  "version": 1,\n  "defaultModelId": "zhipu",\n  "models": []\n}\n',
+    );
+    const [modelsMeta, setModelsMeta] = useState<{ filePath: string; fileExists: boolean } | null>(null);
     const [agentsJson, setAgentsJson] = useState("{}");
 
     const [skillFiles, setSkillFiles] = useState<string[]>([]);
@@ -69,6 +76,7 @@ export function WorkspacePage() {
         try {
             const paths = await apiWorkspacePaths();
             setPathsText(JSON.stringify(paths, null, 2));
+            setPathsObj({ modelsFile: paths.modelsFile });
 
             const fa = await apiWorkspaceFileAccessGet();
             setFileAccessJson(fa.raw);
@@ -79,6 +87,17 @@ export function WorkspacePage() {
 
             const wt = await apiWorkspaceTaskTemplatesGet();
             setTplJson(JSON.stringify(wt.templates, null, 2));
+
+            const md = await apiWorkspaceModelsGet();
+            setModelsMeta({ filePath: md.filePath, fileExists: md.fileExists });
+            setModelsJson(
+                md.rawText ??
+                    JSON.stringify(
+                        md.catalog ?? { version: 1, defaultModelId: "zhipu", models: [] },
+                        null,
+                        2,
+                    ),
+            );
 
             const ag = await apiWorkspaceAgentsGet();
             setAgentsJson(JSON.stringify(ag.registry ?? { agents: [], bindings: [] }, null, 2));
@@ -213,6 +232,55 @@ export function WorkspacePage() {
         }
     };
 
+    const saveModels = async () => {
+        setError(null);
+        setOk(null);
+        try {
+            const catalog = JSON.parse(modelsJson) as unknown;
+            await apiWorkspaceModelsPut(catalog);
+            setOk(t("workspace.savedModels"));
+            await loadAll();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : t("workspace.saveFail"));
+        }
+    };
+
+    const fillModelsTemplate = () => {
+        setModelsJson(
+            JSON.stringify(
+                {
+                    version: 1,
+                    defaultModelId: "zhipu",
+                    models: [
+                        {
+                            id: "zhipu",
+                            label: "智谱（线上）",
+                            driver: "zhipu",
+                            baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+                            modelName: "glm-4.5",
+                            apiKeyEnv: "ZHIPU_API_KEY",
+                            supportsTools: true,
+                            temperature: 0.6,
+                        },
+                        {
+                            id: "ollama-local",
+                            label: "Ollama（本地）",
+                            driver: "ollama",
+                            baseUrl: "http://127.0.0.1:11434",
+                            modelName: "qwen2.5:3b",
+                            supportsTools: true,
+                            temperature: 0.3,
+                        },
+                    ],
+                },
+                null,
+                2,
+            ),
+        );
+        setOk(t("workspace.modelsTemplateLoaded"));
+        setTimeout(() => setOk(null), 2000);
+    };
+
     const saveAgents = async () => {
         setError(null);
         setOk(null);
@@ -332,6 +400,40 @@ export function WorkspacePage() {
                 <Button type="button" className="mt-2" onClick={() => void saveTemplates()}>
                     {t("workspace.save")}
                 </Button>
+            </Card>
+
+            <Card className="p-4">
+                <h3 className="text-sm font-medium text-slate-800 dark:text-slate-200">{t("workspace.modelsTitle")}</h3>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-500">{t("workspace.modelsHint")}</p>
+                <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                    <p>
+                        <span className="font-medium">models.json</span>{" "}
+                        {modelsMeta?.fileExists ? (
+                            <span className="text-emerald-700 dark:text-emerald-400">{t("workspace.fileExists")}</span>
+                        ) : (
+                            <span className="text-amber-700 dark:text-amber-300">{t("workspace.fileMissing")}</span>
+                        )}
+                    </p>
+                    <p className="mt-1 font-mono break-all">
+                        {modelsMeta?.filePath || pathsObj?.modelsFile || "—"}
+                    </p>
+                    {!modelsMeta?.fileExists && (
+                        <p className="mt-1 text-amber-700 dark:text-amber-300">{t("workspace.modelsWillCreate")}</p>
+                    )}
+                </div>
+                <TextArea
+                    className="mt-2 min-h-[220px] font-mono text-xs"
+                    value={modelsJson}
+                    onChange={(e) => setModelsJson(e.target.value)}
+                />
+                <div className="mt-2 flex flex-wrap gap-2">
+                    <Button type="button" onClick={() => void saveModels()}>
+                        {t("workspace.save")}
+                    </Button>
+                    <Button type="button" variant="secondary" onClick={fillModelsTemplate}>
+                        {t("workspace.modelsFillTemplate")}
+                    </Button>
+                </div>
             </Card>
 
             <Card className="p-4">

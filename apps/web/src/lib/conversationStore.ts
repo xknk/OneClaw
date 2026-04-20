@@ -30,6 +30,7 @@ export function createEmptyConversation(defaultTitle: string): Conversation {
         title: defaultTitle,
         sessionKey: `u-${crypto.randomUUID()}`,
         agentId: "main",
+        modelId: "",
         intent: "",
         taskId: "",
         agentLocked: false,

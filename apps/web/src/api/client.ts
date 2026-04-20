@@ -78,6 +78,7 @@ export async function apiChat(body: {
     message: string;
     sessionKey?: string;
     agentId?: string;
+    modelId?: string;
     intent?: string;
     taskId?: string;
     /** 与任务联用时：为 true 则优先使用下方 agentId，不被计划步 assignedAgentId 覆盖 */
@@ -87,6 +88,15 @@ export async function apiChat(body: {
         method: "POST",
         body: JSON.stringify(body),
     });
+}
+
+export type ModelListResponse = {
+    defaultModelId: string;
+    models: Array<{ id: string; label: string; driver: "ollama" | "zhipu"; supportsTools: boolean }>;
+};
+
+export async function apiModels(): Promise<ModelListResponse> {
+    return apiJson<ModelListResponse>("/api/models");
 }
 
 export async function apiSessionReset(body: {
@@ -196,6 +206,7 @@ export type WorkspacePaths = {
     projectRootDir: string;
     mcpServersFile: string;
     taskTemplatesFile: string;
+    modelsFile: string;
     agentsRegistryFile: string;
     skillsJsonDir: string;
     fileAccessRoots: string[];
@@ -275,6 +286,24 @@ export async function apiWorkspaceTaskTemplatesPut(templates: unknown[]): Promis
     return apiJson("/api/workspace/task-templates", {
         method: "PUT",
         body: JSON.stringify({ templates }),
+    });
+}
+
+export type ModelsWorkspaceGet = {
+    filePath: string;
+    fileExists: boolean;
+    catalog: unknown;
+    rawText: string | null;
+};
+
+export async function apiWorkspaceModelsGet(): Promise<ModelsWorkspaceGet> {
+    return apiJson<ModelsWorkspaceGet>("/api/workspace/models");
+}
+
+export async function apiWorkspaceModelsPut(catalog: unknown): Promise<{ ok: boolean; filePath: string; catalog: unknown }> {
+    return apiJson("/api/workspace/models", {
+        method: "PUT",
+        body: JSON.stringify({ catalog }),
     });
 }
 

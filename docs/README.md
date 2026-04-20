@@ -7,6 +7,7 @@
 | 1 | [**用户指南**](./user-guide.md) | Monorepo 与 `.env` 位置；网关 / TUI / REPL；**环境变量表**（与 `appConfig` 对齐）；目录布局；WebChat 鉴权；**Trace 子命令**（`get` / `failed` / `slow` / `replay`）；任务 API 与 CLI；排障表 |
 | 2 | [**产品与交付**](./prd.md) | 术语表；MVP/V4/V5 摘要；**已完成 / 未完成 / 可选增强**；待办 |
 | 3 | [**开发与扩展**](./developer.md) | 模块边界；**Profile / Agent / MCP 三层叠加**；`enableWhen` 字段；`policy-overrides.json`；MCP 配置优先级；安全与代码路径 |
+| 4 | [**模型配置（Web/CLI）**](./model-config.md) | models.json 配置；Web「工作区」一键创建/编辑；CLI `oneclaw models ...`；**环境变量清单**（按模型可分别引用） |
 
 | 补充 | 文档 |
 |------|------|

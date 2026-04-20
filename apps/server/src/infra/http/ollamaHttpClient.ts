@@ -71,8 +71,22 @@ export async function postJson<T>(
             throw new HttpError(`Invalid JSON from ${url}`, 0, url, undefined);
         }
 
-        // 处理其他错误（如网络断开或手动取消请求 AbortError）
-        throw err;
+        // 处理其他错误（如网络断开、连接被拒绝、DNS 失败、手动取消 AbortError）
+        // Node fetch 常见表现：TypeError("fetch failed")，真实原因在 err.cause.code
+        const anyErr = err as any;
+        const isAbort =
+            (anyErr && typeof anyErr === "object" && anyErr.name === "AbortError") ||
+            String(anyErr?.message || "").toLowerCase().includes("aborted");
+        const causeCode = anyErr?.cause?.code ? String(anyErr.cause.code) : "";
+        const causeMsg = anyErr?.cause?.message ? String(anyErr.cause.message) : "";
+        const base = anyErr instanceof Error ? anyErr.message : String(anyErr);
+        const detail = [base, causeCode ? `cause=${causeCode}` : "", causeMsg ? `(${causeMsg})` : ""]
+            .filter(Boolean)
+            .join(" ");
+        if (isAbort) {
+            throw new HttpError(`Network timeout after ${timeoutMs}ms: ${detail}`, 0, url, undefined);
+        }
+        throw new HttpError(`Network error: ${detail}`, 0, url, undefined);
     } finally {
         // --- 8. 清理工作 ---
         // 无论成功还是失败，都必须清除定时器，防止 Node.js 进程无法退出

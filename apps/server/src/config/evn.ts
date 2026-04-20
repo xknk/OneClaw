@@ -71,6 +71,8 @@ export const ollamaConfig = {
     topK: num("OLLAMA_TOP_K", 40),
     repeatPenalty: num("OLLAMA_REPEAT_PENALTY", 1.2),
     numPredict: num("OLLAMA_NUM_PREDICT", 512),
+    /** 连接与生成的整体超时（毫秒），超时会 abort fetch 并报错 */
+    timeout: num("OLLAMA_CONNECT_TIMEOUT", 120000),
 } as const;
 export type OllamaConfig = typeof ollamaConfig;
 

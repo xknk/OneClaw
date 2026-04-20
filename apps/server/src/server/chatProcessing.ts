@@ -333,6 +333,8 @@ export async function handleUnifiedChat(
         // 调用 Agent 引擎，它会根据 messages 和 toolSchemas 决定是说话还是调工具
         replyText = await runAgent(messages, {
             toolSchemas,
+            // modelId 优先；否则退回老字段 modelType
+            modelType: (inbound.modelId?.trim() ? inbound.modelId.trim() : (inbound.modelType ?? "zhipu")) as any,
             executeTool: async (toolName, args) => {
                 const resolved = await registry.resolveByName(toolName, toolExecutionCtx, {
                     health: providerHealth,

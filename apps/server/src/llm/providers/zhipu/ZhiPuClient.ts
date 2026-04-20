@@ -7,22 +7,24 @@ import type {
     ZhiPuTool,
 } from "./types";
 import type { AgentMessage, ChatMessage, ToolSchema } from "../ModelProvider";
+import type { ZhiPuProviderOptions } from "./ZhiPuProvider";
 
 /**
  * 【修正】构建智谱 API 专用的请求载荷
  */
 export function buildZhiPuChatRequest(
     messages: ChatMessage[],
-    overrides?: Partial<{ stream: boolean; temperature: number; num_predict: number; thinking: { enable: boolean } }>
+    overrides?: Partial<{ stream: boolean; temperature: number; num_predict: number; thinking: { enable: boolean } }>,
+    providerOptions?: ZhiPuProviderOptions,
 ): ZhiPuChatRequest {
     // 💡 关键：在构建 Request 之前，必须先将通用 ChatMessage 转换为智谱专用格式
     const zhipuMsgs = toZhiPuMessages(messages);
 
     return {
-        model: zhipuConfig.modelName,
+        model: providerOptions?.modelName?.trim() ? providerOptions.modelName.trim() : zhipuConfig.modelName,
         messages: zhipuMsgs, // 现在类型匹配了：ZhiPuRequestMessage[]
         stream: overrides?.stream ?? zhipuConfig.stream,
-        temperature: overrides?.temperature ?? zhipuConfig.temperature,
+        temperature: overrides?.temperature ?? providerOptions?.temperature ?? zhipuConfig.temperature,
         top_p: zhipuConfig.topP,
         thinking: overrides?.thinking ?? zhipuConfig.thinking,
     };
@@ -81,18 +83,19 @@ export function toZhiPuMessages(messages: AgentMessage[]): ZhiPuRequestMessage[]
 }
 
 
-/**
- * 基础聊天接口
- */
-export async function chatWithZhiPu(messages: ChatMessage[]): Promise<string> {
-    // 自动通过 buildZhiPuChatRequest 调用 toZhiPuMessages 进行转换
-    const body = buildZhiPuChatRequest(messages, { stream: false });
-    const url = `${zhipuConfig.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    
+export async function chatWithZhiPu(
+    messages: ChatMessage[],
+    providerOptions?: ZhiPuProviderOptions,
+): Promise<string> {
+    const baseUrl = providerOptions?.baseUrl?.trim() ? providerOptions.baseUrl.trim() : zhipuConfig.baseUrl;
+    const apiKey = providerOptions?.apiKey?.trim() ? providerOptions.apiKey.trim() : zhipuConfig.apiKey;
+    const body = buildZhiPuChatRequest(messages, { stream: false }, providerOptions);
+    const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+
     const data = await postJson<ZhiPuChatResponse>(url, body, {
         timeoutMs: 120_000,
         headers: {
-            "Authorization": `Bearer ${zhipuConfig.apiKey}`,
+            "Authorization": `Bearer ${apiKey}`,
             "Content-Type": "application/json"
         }
     });
@@ -122,27 +125,36 @@ export function toZhiPuTools(schemas: ToolSchema[]): ZhiPuTool[] {
  */
 export async function chatWithZhiPuWithTools(
     messages: AgentMessage[],
-    tools: ToolSchema[]
+    tools: ToolSchema[],
+    providerOptions?: ZhiPuProviderOptions,
 ): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; id?: string }> }> {
-    const validMessages = messages.filter(m => m.content && m.content.trim() !== "");
-    const url = `${zhipuConfig.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    // 注意：assistant 可能只发 tool_calls 而 content 为空；tool 也可能 content 很短。
+    // 不能简单按 content 过滤，否则会破坏 tool_calls/结果配对。
+    const validMessages = messages.filter((m: any) => {
+        if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return true;
+        if (m.role === "tool") return true;
+        return typeof m.content === "string" && m.content.trim() !== "";
+    });
+    const baseUrl = providerOptions?.baseUrl?.trim() ? providerOptions.baseUrl.trim() : zhipuConfig.baseUrl;
+    const apiKey = providerOptions?.apiKey?.trim() ? providerOptions.apiKey.trim() : zhipuConfig.apiKey;
+    const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
 
     // 统一使用转换器
     const zhipuMessages = toZhiPuMessages(validMessages);
     const zhipuTools = toZhiPuTools(tools);
 
     const body = {
-        model: zhipuConfig.modelName,
+        model: providerOptions?.modelName?.trim() ? providerOptions.modelName.trim() : zhipuConfig.modelName,
         messages: zhipuMessages,
         tools: zhipuTools,
         stream: false,
-        temperature: zhipuConfig.temperature,
+        temperature: providerOptions?.temperature ?? zhipuConfig.temperature,
     };
 
     const data = await postJson<any>(url, body, {
         timeoutMs: 120_000,
         headers: {
-            "Authorization": `Bearer ${zhipuConfig.apiKey}`
+            "Authorization": `Bearer ${apiKey}`
         }
     });
 
@@ -153,13 +165,26 @@ export async function chatWithZhiPuWithTools(
     const responseMsg = data?.choices?.[0]?.message;
     const rawCalls = responseMsg?.tool_calls ?? [];
 
-    const toolCalls = rawCalls.map((tc: any) => ({
-        name: tc.function?.name ?? "",
-        args: typeof tc.function?.arguments === "string" 
-            ? JSON.parse(tc.function.arguments) 
-            : tc.function?.arguments ?? {},
-        id: tc.id
-    }));
+    const toolCalls = rawCalls.map((tc: any) => {
+        const rawArgs = tc.function?.arguments;
+        let args: Record<string, unknown> = {};
+        if (typeof rawArgs === "string") {
+            try {
+                const parsed = JSON.parse(rawArgs);
+                args = (parsed && typeof parsed === "object" && !Array.isArray(parsed)) ? parsed : {};
+            } catch {
+                // 智谱偶尔会返回非严格 JSON；兜底为空对象，交由工具侧做参数校验并返回可读错误
+                args = {};
+            }
+        } else if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+            args = rawArgs;
+        }
+        return {
+            name: tc.function?.name ?? "",
+            args,
+            id: tc.id,
+        };
+    });
 
     return { content: responseMsg?.content ?? "", toolCalls };
 }

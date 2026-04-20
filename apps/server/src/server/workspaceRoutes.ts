@@ -33,6 +33,13 @@ import {
     reloadFileAccessPolicyAfterFileWrite,
     resolveFileAccessJsonPath,
 } from "@/config/fileAccessPolicy";
+import {
+    getModelsFilePath,
+    invalidateModelsCatalogCache,
+    loadModelsCatalog,
+    parseModelsCatalog,
+    readModelsCatalogRaw,
+} from "@/llm/modelCatalog";
 
 function safeSkillJsonBasename(name: string): string {
     const base = path.basename(name.trim());
@@ -65,6 +72,7 @@ export type WorkspacePathsResponse = {
     projectRootDir: string;
     mcpServersFile: string;
     taskTemplatesFile: string;
+    modelsFile: string;
     agentsRegistryFile: string;
     skillsJsonDir: string;
     /** read/search/apply_patch 允许的根目录（含主 workspace 与额外根） */
@@ -85,6 +93,7 @@ function buildPathsPayload(): WorkspacePathsResponse {
         projectRootDir: path.resolve(appConfig.projectRootDir),
         mcpServersFile: path.resolve(resolveMcpServersFilePathForAdmin()),
         taskTemplatesFile: path.resolve(getTaskTemplatesFilePath()),
+        modelsFile: path.resolve(getModelsFilePath()),
         agentsRegistryFile: path.resolve(getAgentRegistryPath()),
         skillsJsonDir: path.resolve(skillsJsonDir()),
         fileAccessRoots: getFileAccessRoots().map((r) => path.resolve(r)),
@@ -100,6 +109,44 @@ export function registerWorkspaceRoutes(app: express.Application): void {
         } catch (err) {
             console.error("/api/workspace/paths:", redactForLog(err));
             res.status(500).json({ error: err instanceof Error ? err.message : "服务器内部错误" });
+        }
+    });
+
+    /**
+     * 模型配置：models.json（供 Web 配置可选模型列表）
+     */
+    app.get("/api/workspace/models", (_req, res) => {
+        try {
+            const raw = readModelsCatalogRaw();
+            const catalog = loadModelsCatalog();
+            res.json({
+                filePath: raw.filePath,
+                fileExists: raw.exists,
+                catalog,
+                rawText: raw.rawText,
+            });
+        } catch (err) {
+            console.error("/api/workspace/models GET:", redactForLog(err));
+            res.status(500).json({ error: err instanceof Error ? err.message : "服务器内部错误" });
+        }
+    });
+
+    app.put("/api/workspace/models", async (req, res) => {
+        try {
+            const body = req.body ?? {};
+            // 兼容两种形态：直接传 catalog，或 { catalog: ... }
+            const rawCatalog = (body as any).catalog ?? body;
+            const parsed = parseModelsCatalog(rawCatalog);
+            const filePath = getModelsFilePath();
+            await writeJsonFileAtomic(filePath, parsed);
+            invalidateModelsCatalogCache();
+            res.json({ ok: true, filePath, catalog: parsed });
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : "服务器内部错误";
+            // 大多是校验错误，按 400 返回更友好
+            const code = msg.includes("格式错误") ? 400 : 500;
+            if (code === 500) console.error("/api/workspace/models PUT:", redactForLog(err));
+            res.status(code).json({ error: msg });
         }
     });
 
