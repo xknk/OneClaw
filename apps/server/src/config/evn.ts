@@ -81,6 +81,11 @@ export const zhipuConfig = {
     baseUrl: str("ZHIPU_BASE_URL", ""),
     apiKey: str("ZHIPU_API_KEY", ""),
     stream: bool("ZHIPU_STREAMING", false),
+    /**
+     * 带工具对话时是否用智谱 SSE 流式（TUI/Web 会传 onAssistantTextDelta）。
+     * 默认 false：走非流式请求更稳，再在本地一次性推 delta，避免 Node 下 SSE 解析/断流导致空回包或挂死。
+     */
+    streamTools: bool("ZHIPU_STREAM_TOOLS", false),
     temperature: num("ZHIPU_TEMPERATURE", 0.6),
     topP: num("ZHIPU_TOP_P", 0.95),
     thinking: { enable: bool("ZHIPU_THINKING_ENABLE", false) },
@@ -125,6 +130,11 @@ export const appConfig = {
     execEnabled: bool("ONECLAW_EXEC_ENABLED", true),
     /** exec 禁止的命令模式（逗号分隔正则），命中则不执行 */
     execDeniedPatterns: str("ONECLAW_EXEC_DENIED_PATTERNS", "rm\\s+-rf\\s+/|format\\s+[a-z]|del\\s+/f\\s+/s|mkfs\\.|:(){:|:&};:"),
+    /**
+     * Windows 下 cmd 常见输出 GBK(OEM CP936)；默认按 cp936 解码 stdout/stderr，避免乱码。
+     * 若你已统一 UTF-8（如 chcp 65001），可设为 utf8。
+     */
+    execStdoutEncoding: str("ONECLAW_EXEC_STDOUT_ENCODING", ""),
     /** QQ 渠道是否启用（Phase 3） */
     qqBotEnabled: bool("ONECLAW_QQ_BOT_ENABLED", false),
     /** OneBot 兼容实现的 API 地址（如 go-cqhttp 的 http://127.0.0.1:5700），用于发送回复 */
@@ -139,6 +149,17 @@ export const appConfig = {
     dailyReportScheduleMinute: Math.min(59, Math.max(0, num("ONECLAW_DAILY_REPORT_SCHEDULE_MINUTE", 0))),
     /** V4 M3：带 taskId 的任务是否对 exec/apply_patch 强制待审批 */
     taskHighRiskApprovalEnabled: bool("ONECLAW_TASK_HIGH_RISK_APPROVAL", true),
+    /**
+     * 无 task 的 WebChat/TUI：用户批准一次后，为**当前挂起工具名**增加的**可执行次数**。
+     * 默认 1 = 每次高危调用都需先点「同意」（上一批准仅放行紧接着的那一次）。
+     * 若需同一句「同意」连跑多步，可改为更大数值。
+     */
+    chatRiskSessionApprovalBurst: num("ONECLAW_CHAT_RISK_SESSION_APPROVAL_BURST", 1),
+    /**
+     * 为 true 时，一次批准会对**所有**内置高危工具名同时充值（少用：易跳过多次确认）。
+     * 默认 false：仅对**当前待确认的那一种工具**充值，其它敏感工具下次仍要确认。
+     */
+    chatRiskSessionApproveAllHighRisk: bool("ONECLAW_CHAT_RISK_SESSION_APPROVE_ALL_TOOLS", false),
     /**
  * MCP：单次 listTools（含 connect）最大等待毫秒；超时视为该 MCP 不可用，上层跳过工具列表。
  */
@@ -180,6 +201,19 @@ export const appConfig = {
     toolResultSampleTailChars: num("ONECLAW_TOOL_RESULT_SAMPLE_TAIL_CHARS", 8_000),
     /** 主模型失败时回退的模型 id（与 models.json 对齐；空则关闭） */
     fallbackModelId: str("ONECLAW_FALLBACK_MODEL_ID", ""),
+    /**
+     * 为 true（默认）时，每轮对话在 system 前缀注入「移动文件」安全顺序提示，引导模型先写目标再删源、或单条 move。
+     * 关可减少 token；不关则无法约束模型计划，仍可能出现先删后建。
+     */
+    fileRelocationSafetyHintEnabled: bool("ONECLAW_FILE_RELOCATION_SAFETY_HINT", true),
+    /**
+     * Brave Search API Key（web_search）。优先 ONECLAW_BRAVE_API_KEY，否则 BRAVE_API_KEY。
+     * 申请：https://brave.com/search/api/
+     */
+    braveSearchApiKey:
+        (process.env.ONECLAW_BRAVE_API_KEY && String(process.env.ONECLAW_BRAVE_API_KEY).trim()) ||
+        (process.env.BRAVE_API_KEY && String(process.env.BRAVE_API_KEY).trim()) ||
+        "",
 } as const;
 
 export const PORT = num("PORT", 3000);

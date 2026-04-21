@@ -14,6 +14,7 @@ const SLASH_ZH: SlashCommandEntry[] = [
     { cmd: "/help", desc: "显示内置命令与说明" },
     { cmd: "/?", desc: "同 /help" },
     { cmd: "/session", desc: "切换会话键：/session <key>", needsArg: true },
+    { cmd: "/model", desc: "切换对话模型：/model <id>（↑↓ Tab）", needsArg: true },
     { cmd: "/clear", desc: "清空本窗口消息列表" },
     { cmd: "/status", desc: "会话、模型与目录摘要" },
     { cmd: "/workspace", desc: "配置文件路径（MCP、模板、技能、agents）" },
@@ -24,6 +25,8 @@ const SLASH_ZH: SlashCommandEntry[] = [
     { cmd: "/trace", desc: "trace 命令入口：/trace <subcommand>", needsArg: true },
     { cmd: "/tr", desc: "trace 别名：/tr <subcommand>", needsArg: true },
     { cmd: "/start", desc: "启动 Gateway（建议在独立终端执行）" },
+    { cmd: "/approve-risk", desc: "批准本会话下一次高风险工具（无 --task 时）" },
+    { cmd: "/task-approve", desc: "任务 pending_approve 时人工批准（须已 --task）" },
     { cmd: "/exit", desc: "退出 TUI" },
 ];
 
@@ -31,6 +34,7 @@ const SLASH_EN: SlashCommandEntry[] = [
     { cmd: "/help", desc: "Built-in commands and help" },
     { cmd: "/?", desc: "Same as /help" },
     { cmd: "/session", desc: "Switch session key: /session <key>", needsArg: true },
+    { cmd: "/model", desc: "Switch chat model: /model <id> (↑↓ Tab)", needsArg: true },
     { cmd: "/clear", desc: "Clear messages in this window" },
     { cmd: "/status", desc: "Session, model, and paths summary" },
     { cmd: "/workspace", desc: "Config file paths (MCP, templates, skills, agents)" },
@@ -41,6 +45,8 @@ const SLASH_EN: SlashCommandEntry[] = [
     { cmd: "/trace", desc: "Trace CLI: /trace <subcommand>", needsArg: true },
     { cmd: "/tr", desc: "Alias for /trace", needsArg: true },
     { cmd: "/start", desc: "Start Gateway (use a separate terminal)" },
+    { cmd: "/approve-risk", desc: "Approve next high-risk tool for this session (no --task)" },
+    { cmd: "/task-approve", desc: "Approve pending task (requires --task)" },
     { cmd: "/exit", desc: "Exit TUI" },
 ];
 

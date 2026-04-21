@@ -7,7 +7,7 @@ import fs from "fs/promises";
 import path from "path";
 import { appConfig, ollamaConfig, PORT } from "../config/evn";
 import { getFileAccessDeniedPrefixes, getFileAccessRoots } from "../config/fileAccessPolicy";
-import { loadMcpServerConfigs } from "../config/mcpConfig";
+import { loadMcpServerConfigs, resolveMcpServersFilePathForAdmin } from "../config/mcpConfig";
 
 type Status = "ok" | "warn" | "fail";
 /**
@@ -96,10 +96,15 @@ export async function runDoctor(): Promise<void> {
 
     // 5. MCP 服务检查 (MCP Check)
     const mcp = loadMcpServerConfigs();
+    const mcpAdminPath = resolveMcpServersFilePathForAdmin();
     if (mcp.length) {
         line("ok", `MCP 已配置 ${mcp.length} 个 stdio 服务: ${mcp.map((x) => x.id).join(", ")}`);
     } else {
-        line("ok", "未配置 MCP（不设 ONECLAW_MCP_SERVERS 则不加载外部 MCP 工具）");
+        line(
+            "warn",
+            "当前未加载任何 MCP 服务（工具列表里不会有 MCP 工具）",
+            `可在 ${mcpAdminPath} 创建 JSON，或设置 ONECLAW_MCP_SERVERS / ONECLAW_MCP_SERVERS_FILE；仓库示例见 workspace/config/mcp-servers*.example.json`,
+        );
     }
 
     // 6. 工具策略检查 (Tool-policy)

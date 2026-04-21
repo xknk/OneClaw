@@ -17,13 +17,23 @@ export type ChatMessage =
         content: string;
         tool_call_id?: string; // 某些厂商（如智谱、OpenAI）需要这个 ID
     };
+/** 供各 Provider 转成自家格式的轻量 JSON Schema（支持 array items 等嵌套） */
+export type ToolSchemaProperty =
+    | { type: string; description?: string }
+    | {
+          type: string;
+          description?: string;
+          items?: ToolSchemaProperty;
+          properties?: Record<string, ToolSchemaProperty>;
+      };
+
 /** 与具体 API 无关的工具描述，供各 Provider 转成自家格式 */
 export type ToolSchema = {
     name: string;
     description: string;
     parameters?: {
         type: "object";
-        properties?: Record<string, { type: string; description?: string }>;
+        properties?: Record<string, ToolSchemaProperty>;
         required?: string[];
     };
 };

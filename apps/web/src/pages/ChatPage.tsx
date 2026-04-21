@@ -18,6 +18,34 @@ import { Button, Card, Input, Select, TextArea } from "@/components/ui";
 import { createEmptyConversation, loadConversations, saveConversations } from "@/lib/conversationStore";
 import { ensureRegistered, getProfile } from "@/lib/localUser";
 
+const MAX_SSE_PROGRESS_LINES = 48;
+
+function sseToProgressLine(
+    obj: Record<string, unknown>,
+    t: (key: string, vars?: Record<string, string>) => string,
+): string | null {
+    if (obj.type === "model" && obj.event && typeof obj.event === "object") {
+        const ev = obj.event as { type?: string; round?: number };
+        if (ev.type === "llm.request" && typeof ev.round === "number") {
+            return t("chat.progressRound", { round: String(ev.round) });
+        }
+    }
+    if (obj.type === "tool_start" && typeof obj.toolName === "string") {
+        const ap = typeof obj.argsPreview === "string" ? obj.argsPreview : "";
+        const short = ap.length > 120 ? `${ap.slice(0, 120)}…` : ap;
+        const preview = short.trim() ? ` · ${short}` : "";
+        return t("chat.progressToolStart", { name: obj.toolName, preview });
+    }
+    if (obj.type === "tool" && typeof obj.toolName === "string") {
+        const ms = typeof obj.durationMs === "number" ? String(obj.durationMs) : "?";
+        const ok = obj.ok === true;
+        return ok
+            ? t("chat.progressToolOk", { name: obj.toolName, ms })
+            : t("chat.progressToolFail", { name: obj.toolName, ms });
+    }
+    return null;
+}
+
 export function ChatPage() {
     const { hasToken } = useAuth();
     const { t } = useLocale();
@@ -51,6 +79,8 @@ export function ChatPage() {
     const prevActiveId = useRef<string | null>(null);
     const chatAbortRef = useRef<AbortController | null>(null);
     const [streamPartial, setStreamPartial] = useState(false);
+    /** 仅请求进行中展示；完成后清空，不写入会话历史 */
+    const [sseProgress, setSseProgress] = useState<string[]>([]);
 
     const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined;
 
@@ -221,6 +251,7 @@ export function ChatPage() {
             const userMsg: ChatMessage = { role: "user", text };
             chatAbortRef.current = new AbortController();
             setStreamPartial(false);
+            setSseProgress([]);
             setMessages((m) => [...m, userMsg, { role: "assistant", text: "" }]);
 
             try {
@@ -243,6 +274,18 @@ export function ChatPage() {
                 }
                 const { reply, metadata } = await apiChat(body, {
                     signal: chatAbortRef.current.signal,
+                    onSse: (obj) => {
+                        const line = sseToProgressLine(obj, t);
+                        if (!line) {
+                            return;
+                        }
+                        setSseProgress((prev) => {
+                            const next = [...prev, line];
+                            return next.length > MAX_SSE_PROGRESS_LINES
+                                ? next.slice(next.length - MAX_SSE_PROGRESS_LINES)
+                                : next;
+                        });
+                    },
                     onDelta: (d) => {
                         setStreamPartial(true);
                         setMessages((m) => {
@@ -315,6 +358,7 @@ export function ChatPage() {
                 setLoading(false);
                 chatAbortRef.current = null;
                 setStreamPartial(false);
+                setSseProgress([]);
             }
         },
         [
@@ -767,7 +811,23 @@ export function ChatPage() {
                                     </div>
                                 </div>
                             ))}
-                            {loading && !streamPartial && (
+                            {loading && sseProgress.length > 0 && (
+                                <div className="flex justify-start">
+                                    <div className="max-w-[92%] rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700/80 dark:bg-slate-800/80 dark:text-slate-300 sm:max-w-[85%]">
+                                        <div className="mb-1 font-medium text-slate-500 dark:text-slate-400">
+                                            {t("chat.progressPanelTitle")}
+                                        </div>
+                                        <ul className="space-y-0.5 font-mono text-[11px] leading-snug">
+                                            {sseProgress.map((line, i) => (
+                                                <li key={i} className="break-all">
+                                                    {line}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
+                            {loading && !streamPartial && sseProgress.length === 0 && (
                                 <div className="flex justify-start">
                                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500 dark:border-slate-700/80 dark:bg-slate-800/60 dark:text-slate-400">
                                         {t("chat.thinking")}

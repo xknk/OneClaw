@@ -3,6 +3,7 @@ import { runAgent } from "@/agent/runAgent";
 import { UnifiedInboundMessage, UnifiedOutboundMessage } from "@/channels/unifiedMessage";
 import { appConfig } from "@/config/evn";
 import { ChatMessage, resolveRollingSummaryModelKey } from "@/llm/model";
+import { stripModelThinkingMarkup } from "@/llm/sanitizeModelOutput";
 import { buildMessagesForModel, triggerBackgroundMaintenance } from "@/session/buildModelContext";
 import {
     getOrCreateSessionId,
@@ -15,7 +16,19 @@ import {
     scheduleRollingPrefetchAfterAssistant,
 } from "@/session/rollingPrefetch";
 import { appendMessage, readMessages } from "@/session/transcript";
-import { getChatRiskPendingApproval } from "@/session/riskApprovalSession";
+import {
+    getChatRiskPendingApproval,
+    dismissSessionChatRisk,
+    approveSessionChatRisk,
+} from "@/session/riskApprovalSession";
+import { parseRiskApprovalIntent } from "@/session/riskApprovalIntent";
+import {
+    riskSessionApproveContinueUser,
+    riskTaskApproveContinueUser,
+    riskRejectSessionReply,
+    riskRejectTaskReply,
+} from "@/i18n/riskApprovalMessages";
+import { fileRelocationSafetySystemHint } from "@/i18n/fileRelocationSafetyHint";
 import { SessionKey } from "@/session/type";
 import { loadSkillsForContext } from "@/skills/loadSkills";
 import { evaluateToolPermission, resolveProfileId } from "@/security/policy";
@@ -35,6 +48,7 @@ import {
 } from "@/tools";
 import { ProviderHealth } from "@/tools/providerHealth";
 import { emitTrace } from "@/observability/trace";
+import { resolveModelEntry } from "@/llm/modelCatalog";
 import { getMcpProvidersForRegistry } from "@/tools/mcpRegistry";
 import {
     appendTimelineNote,
@@ -45,7 +59,7 @@ import {
     type PrepareTaskForChatResult,
 } from "@/tasks/taskService";
 import { formatTaskContextForModel } from "@/tasks/taskContextPrompt";
-import { interceptHighRiskToolForTask } from "@/tasks/taskApproval";
+import { interceptHighRiskToolForTask, approvePendingTask } from "@/tasks/taskApproval";
 import { ToolPolicyGuard, ToolPolicyError } from "@/tasks/stepToolPolicy";
 import { META_PENDING_APPROVAL_KEY, type PlanStep } from "@/tasks/collaborationTypes";
 import {
@@ -57,6 +71,20 @@ import {
  * 不同的渠道（Web/QQ）会传入不同的实现来完成消息回传
  */
 type OutboundSender = (outbound: UnifiedOutboundMessage) => Promise<void>;
+
+/** 与 models.json 的 defaultModelId 对齐：未显式传 modelId/modelType 时不应硬编码 zhipu */
+function resolveInboundModelKey(inbound: UnifiedInboundMessage): string {
+    const mid = inbound.modelId?.trim();
+    if (mid) return mid;
+    if (inbound.modelType === "ollama" || inbound.modelType === "zhipu") {
+        return inbound.modelType;
+    }
+    try {
+        return resolveModelEntry(null).modelId;
+    } catch {
+        return "zhipu";
+    }
+}
 
 /** Web 流式 / 中止 等扩展（optimize §4 §7） */
 export type UnifiedChatHandlerOptions = {
@@ -136,6 +164,20 @@ async function failTaskAfterChatError(
         console.error("[tasks] failTaskAfterChatError:", e);
     }
 }
+
+function truncateForTui(s: string, max: number): string {
+    if (s.length <= max) return s;
+    return `${s.slice(0, max)}…`;
+}
+
+function jsonPreviewForTui(args: Record<string, unknown> | undefined, max: number): string {
+    try {
+        return truncateForTui(JSON.stringify(args ?? {}, null, 0), max);
+    } catch {
+        return "";
+    }
+}
+
 /**
  * 统一聊天处理器（核心逻辑管道）
  * 流程：入站 -> 获取会话 -> 读取历史 -> 自动摘要/裁剪 -> 注入技能 -> 调用 Agent -> 存储回复 -> 出站回传
@@ -178,8 +220,31 @@ export async function handleUnifiedChat(
     const agent = getAgentConfig(agentId); // 获取agent配置
     // 获取权限组
     const profileId = resolveProfileId({ channelId: inbound.channelId, agentId });
-    // 获取用户输入
-    const userText = normalizeTextForAgent(agentId, inbound.text);
+    // 获取用户输入；若当前有待审批且用户用自然语言/斜杠确认，则替换为「请模型重试工具」的固定句（与 Web 批准后自动续聊一致）
+    let userText = normalizeTextForAgent(agentId, inbound.text);
+    const userTextOriginal = userText;
+    const sessionRiskPending =
+        !taskId && !!(await getChatRiskPendingApproval(userSessionKey, agentId));
+    const taskRiskPending = !!(taskId && taskPrep?.record?.status === "pending_approval");
+    const riskIntent = parseRiskApprovalIntent(userText, {
+        sessionRiskPending,
+        taskRiskPending,
+    });
+    let riskRejectionKind: "session" | "task" | null = null;
+    if (sessionRiskPending || taskRiskPending) {
+        if (sessionRiskPending && riskIntent === "approve") {
+            await approveSessionChatRisk(userSessionKey, agentId);
+            userText = riskSessionApproveContinueUser(appConfig.uiLocale);
+        } else if (sessionRiskPending && riskIntent === "reject") {
+            await dismissSessionChatRisk(userSessionKey, agentId);
+            riskRejectionKind = "session";
+        } else if (taskRiskPending && taskId && riskIntent === "approve") {
+            await approvePendingTask(taskId);
+            userText = riskTaskApproveContinueUser(appConfig.uiLocale);
+        } else if (taskRiskPending && riskIntent === "reject") {
+            riskRejectionKind = "task";
+        }
+    }
 
     if (taskId) {
         try {
@@ -216,16 +281,49 @@ export async function handleUnifiedChat(
             }
             : {}),
     };
-    // 开始链路追踪
-    await emitTrace(traceBase, "session.start", {
-        meta: {
-            textLength: userText.length,
+    // 开始链路追踪（失败不应阻断对话：避免 trace 目录不可写时整轮无回复）
+    try {
+        await emitTrace(traceBase, "session.start", {
+            meta: {
+                textLength: userText.length,
+                taskId,
+                taskHooks: taskPrep?.hooksEnabled ?? false,
+                userSessionKey,
+                transcriptSessionKey: sessionKey,
+            },
+        });
+    } catch (traceErr) {
+        console.error("[handleUnifiedChat] session.start trace failed:", traceErr);
+    }
+
+    if (riskRejectionKind) {
+        const sessionIdEarly = await getOrCreateSessionId(sessionKey, agentId);
+        const replyText =
+            riskRejectionKind === "session"
+                ? riskRejectSessionReply(appConfig.uiLocale)
+                : riskRejectTaskReply(appConfig.uiLocale, taskId!);
+        await appendMessage(sessionIdEarly, "user", userTextOriginal, agentId);
+        await appendMessage(sessionIdEarly, "assistant", replyText, agentId);
+        await touchSession(sessionKey, agentId);
+        const outboundMeta: Record<string, unknown> = {
+            traceId,
+            agentId,
+            profileId,
             taskId,
-            taskHooks: taskPrep?.hooksEnabled ?? false,
-            userSessionKey,
-            transcriptSessionKey: sessionKey,
-        },
-    });
+            decisionSource,
+        };
+        await sendOutbound({ text: replyText, metadata: outboundMeta });
+        await emitTrace(traceBase, "session.end", {
+            ok: true,
+            meta: {
+                riskRejected: riskRejectionKind,
+                taskId,
+                userSessionKey,
+                transcriptSessionKey: sessionKey,
+            },
+        });
+        return;
+    }
 
     // --- 3. 记忆与上下文管理 ---
 
@@ -254,6 +352,12 @@ export async function handleUnifiedChat(
 
     if (agent.systemPromptPrefix) {
         prefixBlocks.push({ role: "system", content: agent.systemPromptPrefix });
+    }
+    if (appConfig.fileRelocationSafetyHintEnabled) {
+        prefixBlocks.push({
+            role: "system",
+            content: fileRelocationSafetySystemHint(appConfig.uiLocale),
+        });
     }
 
     // 根据当前上下文加载动态技能（例如从数据库加载的特定业务逻辑）
@@ -358,26 +462,43 @@ export async function handleUnifiedChat(
 
     // --- 6. 核心推理循环 (The Run Loop) ---
     let replyText = "";
+    /** 本轮 runAgent 内已执行工具（用于 trace session.tools.summary） */
+    const roundToolSteps: Array<{ toolName: string; ok: boolean; durationMs: number }> = [];
     try {
         // 调用 Agent 引擎，它会根据 messages 和 toolSchemas 决定是说话还是调工具
         replyText = await runAgent(messages, {
             toolSchemas,
-            // modelId 优先；否则退回老字段 modelType
-            modelType: (inbound.modelId?.trim() ? inbound.modelId.trim() : (inbound.modelType ?? "zhipu")) as any,
+            // modelId 优先；否则退回 modelType；再否则使用 models.json 的 defaultModelId
+            modelType: resolveInboundModelKey(inbound) as any,
             toolParallelSafe: (name) => parallelSafeNames.has(name),
             resolveToolSchemas: (toolRound) => (toolRound <= 1 ? toolSchemasSlim : toolSchemas),
             abortSignal: handlerOpts?.abortSignal,
             onAssistantTextDelta: handlerOpts?.sseWrite
                 ? (chunk) => {
-                      if (chunk) handlerOpts.sseWrite!({ type: "delta", text: chunk });
+                      const c = stripModelThinkingMarkup(chunk);
+                      if (c) handlerOpts.sseWrite!({ type: "delta", text: c });
                   }
                 : undefined,
+            onToolCallStarting: async (ev) => {
+                handlerOpts?.sseWrite?.({
+                    type: "tool_start",
+                    toolName: ev.toolName,
+                    argsPreview: jsonPreviewForTui(ev.args, 900),
+                });
+            },
             onToolCallFinished: async (ev) => {
+                roundToolSteps.push({
+                    toolName: ev.toolName,
+                    ok: ev.ok,
+                    durationMs: ev.durationMs,
+                });
                 handlerOpts?.sseWrite?.({
                     type: "tool",
                     toolName: ev.toolName,
                     ok: ev.ok,
                     durationMs: ev.durationMs,
+                    argsPreview: jsonPreviewForTui(ev.args, 900),
+                    resultPreview: truncateForTui(ev.result ?? "", 2500),
                 });
             },
             executeTool: async (toolName, args) => {
@@ -425,15 +546,21 @@ export async function handleUnifiedChat(
                 return execService.execute(toolName, args);
             },
             onModelEvent: async (e) => {
-                await emitTrace(traceBase, e.type, { meta: e });
+                try {
+                    await emitTrace(traceBase, e.type, { meta: e });
+                } catch (traceErr) {
+                    console.error("[handleUnifiedChat] onModelEvent trace failed:", traceErr);
+                }
                 handlerOpts?.sseWrite?.({ type: "model", event: e });
             },
         });
 
+        replyText = stripModelThinkingMarkup(replyText);
+
         // --- 7. 响应与任务反馈 ---
         await appendMessage(sessionId, "assistant", replyText, agentId); // 保存 AI 回复
         await touchSession(sessionKey, agentId); // 更新活跃时间
-        scheduleRollingPrefetchAfterAssistant(sessionKey, agentId, sessionId);
+        scheduleRollingPrefetchAfterAssistant(sessionKey, agentId, sessionId, inbound.modelId);
 
         const outboundMeta: Record<string, unknown> = {
             traceId,
@@ -464,6 +591,21 @@ export async function handleUnifiedChat(
             text: replyText,
             metadata: outboundMeta,
         });
+        try {
+            await emitTrace(traceBase, "session.tools.summary", {
+                meta: {
+                    toolsExecuted: roundToolSteps.length > 0,
+                    toolCount: roundToolSteps.length,
+                    toolNames: roundToolSteps.map((s) => s.toolName),
+                    allToolsOk: roundToolSteps.length > 0 ? roundToolSteps.every((s) => s.ok) : true,
+                    steps: roundToolSteps,
+                    userSessionKey,
+                    transcriptSessionKey: sessionKey,
+                },
+            });
+        } catch (traceErr) {
+            console.error("[handleUnifiedChat] session.tools.summary trace failed:", traceErr);
+        }
         // 再次获取历史信息
         const storeHistory = await readMessages(sessionId, agentId);
         const storeRollingIn = await getRollingState(sessionKey, agentId);

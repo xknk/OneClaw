@@ -17,9 +17,15 @@ import {
     setPendingChatRiskApproval,
     tryConsumeChatRiskGrant,
 } from "@/session/riskApprovalSession";
+import { HIGH_RISK_BUILTIN_TOOL_NAMES } from "@/security/highRiskBuiltinTools";
+import {
+    interceptMissingSessionKey,
+    interceptSessionAwaitingApproval,
+    interceptTaskMovedToPending,
+    interceptTaskWhilePending,
+} from "@/i18n/riskApprovalMessages";
 
-/** 定义哪些工具是高风险的：exec、apply_patch、delete_file */
-const HIGH_RISK_TOOLS = new Set(["exec", "apply_patch", "delete_file"]);
+const HIGH_RISK_TOOLS = new Set<string>(HIGH_RISK_BUILTIN_TOOL_NAMES);
 
 /**
  * 判断工具是否需要任务风险审批
@@ -106,9 +112,11 @@ export async function interceptHighRiskToolForTask(opts: {
 
         if (t.status === "pending_approval") {
             const summary = summarizeArgs(opts.args);
-            return (
-                `无权限（待审批）：任务 ${taskId} 当前为 pending_approval。` +
-                `请在页面弹窗中批准或调用接口后再重试工具「${opts.toolName}-${summary}」。`
+            return interceptTaskWhilePending(
+                appConfig.uiLocale,
+                taskId,
+                opts.toolName,
+                summary,
             );
         }
 
@@ -140,18 +148,12 @@ export async function interceptHighRiskToolForTask(opts: {
             timelineNote: `待审批：${opts.toolName} ${argsSummary.slice(0, 160)}`,
         });
 
-        return (
-            `【已拦截 · 待人工审批】工具「${opts.toolName}」为高风险操作，状态已设为 pending_approval。\n` +
-            `动作摘要：${argsSummary}\n` +
-            `请在当前对话页弹窗中确认，或调用：POST /api/tasks/${taskId}/approve 后再重试。`
-        );
+        return interceptTaskMovedToPending(appConfig.uiLocale, taskId, opts.toolName, argsSummary);
     }
 
     // 无 taskId：会话级挂起（与任务状态机独立）
     if (!sk) {
-        return (
-            `【已拦截 · 待确认】工具「${opts.toolName}」需要人工确认，但缺少 sessionKey，无法挂起审批。`
-        );
+        return interceptMissingSessionKey(appConfig.uiLocale, opts.toolName);
     }
 
     const at = nowIso();
@@ -162,10 +164,7 @@ export async function interceptHighRiskToolForTask(opts: {
         requestedAt: at,
     });
 
-    return (
-        `【已拦截 · 待确认】工具「${opts.toolName}」为高风险操作。请在当前页弹窗中点击「批准执行」，` +
-        `然后再发一条消息让模型重试该工具。`
-    );
+    return interceptSessionAwaitingApproval(appConfig.uiLocale, opts.toolName);
 }
 
 /**

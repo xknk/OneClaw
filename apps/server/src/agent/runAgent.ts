@@ -20,7 +20,38 @@ import { normalizeToolGuardResult } from "@/security/toolGuard";
 
 const MAX_TOOL_ROUNDS = 5;
 
+/** 模型仅返回 tool_calls、正文为空时常见；达到工具轮次上限时最后一轮也常无正文。用无工具的一轮把工具结果落成自然语言。 */
+const SYNTH_USER_PROMPT =
+    "请根据上述工具执行结果，用自然语言简洁回答用户最后一个问题。不要调用工具，只输出最终回答。";
+
+/**
+ * 仍无任何可展示正文时的兜底（避免 TUI/Web 侧出现「空 assistant」误判为故障）。
+ * 若根因是 API/模型问题，用户至少能看到这句而非空白。
+ */
+export const EMPTY_REPLY_FALLBACK =
+    "模型未返回可展示的内容。请重试、检查 API/模型配置与网络，或缩短问题。";
+
 type executeTool = (toolName: string, args: Record<string, unknown> | undefined) => Promise<string>;
+
+function hasToolFeedback(messages: AgentMessage[]): boolean {
+    return messages.some((m) => m.role === "tool");
+}
+
+/** 在已有 tool 角色的上下文上追加一轮「禁工具」请求，尽量生成最终可读回复 */
+async function synthesizeAfterTools(
+    agentMessages: AgentMessage[],
+    modelType: string,
+    callOpts: { signal?: AbortSignal; onAssistantTextDelta?: (chunk: string) => void },
+): Promise<string> {
+    if (!hasToolFeedback(agentMessages)) return "";
+    const forSynth: AgentMessage[] = [...agentMessages, { role: "user", content: SYNTH_USER_PROMPT }];
+    try {
+        const r = await callLlmWithOptionalFallback(forSynth, [], modelType, callOpts);
+        return (r.content ?? "").trim();
+    } catch {
+        return "";
+    }
+}
 
 function isToolFailureResultString(result: string): boolean {
     return (
@@ -57,6 +88,11 @@ export interface RunAgentOptions {
         toolName: string,
         args: Record<string, unknown> | undefined
     ) => string | null | ToolGuardResult;
+    /** 工具真正执行前（用于 TUI/Web 展示「正在调用…」） */
+    onToolCallStarting?: (event: {
+        toolName: string;
+        args: Record<string, unknown> | undefined;
+    }) => Promise<void> | void;
     onToolCallFinished?: (event: {
         toolName: string;
         args: Record<string, unknown> | undefined;
@@ -154,6 +190,10 @@ export async function runAgent(messages: ChatMessage[], options?: RunAgentOption
     const maxRounds = options?.maxToolRounds ?? MAX_TOOL_ROUNDS;
     const baseToolSchemas = options?.toolSchemas ?? getToolSchemas();
     const modelType = options?.modelType?.trim() ? options.modelType.trim() : "zhipu";
+    const callOpts = {
+        signal: options?.abortSignal,
+        onAssistantTextDelta: options?.onAssistantTextDelta,
+    };
 
     const agentMessages: AgentMessage[] = [...messages];
     let round = 0;
@@ -173,10 +213,6 @@ export async function runAgent(messages: ChatMessage[], options?: RunAgentOption
         });
 
         const schemasThisRound = options?.resolveToolSchemas?.(round) ?? baseToolSchemas;
-        const callOpts = {
-            signal: options?.abortSignal,
-            onAssistantTextDelta: options?.onAssistantTextDelta,
-        };
 
         let content: string;
         let toolCalls: ChatWithToolsResult["toolCalls"];
@@ -196,6 +232,9 @@ export async function runAgent(messages: ChatMessage[], options?: RunAgentOption
             }
             const msg = err instanceof Error ? err.message : String(err);
             await options?.onModelEvent?.({ type: "llm.error", round, error: msg });
+            if (/429|Too\s+Many\s+Requests|rate\s*limit/i.test(msg)) {
+                return `模型请求失败：${msg}\n（接口限流：请隔几分钟再试，或在智谱开放平台核对配额与并发。）`;
+            }
             return `模型请求失败：${msg}`;
         }
 
@@ -208,7 +247,13 @@ export async function runAgent(messages: ChatMessage[], options?: RunAgentOption
             contentLength: content?.length ?? 0,
         });
 
-        if (toolCalls.length === 0) return content || lastContent;
+        if (toolCalls.length === 0) {
+            const plain = (content ?? "").trim();
+            if (plain) return plain;
+            const syn = await synthesizeAfterTools(agentMessages, modelType, callOpts);
+            if (syn.trim()) return syn;
+            return EMPTY_REPLY_FALLBACK;
+        }
 
         const normalizedToolCalls = toolCalls.map((tc, idx) => ({
             ...tc,
@@ -246,13 +291,29 @@ export async function runAgent(messages: ChatMessage[], options?: RunAgentOption
         }
     }
 
-    return lastContent;
+    let finalOut = (lastContent ?? "").trim();
+    if (!finalOut) {
+        finalOut = (await synthesizeAfterTools(agentMessages, modelType, callOpts)).trim();
+    }
+    if (!finalOut) {
+        finalOut = EMPTY_REPLY_FALLBACK;
+    }
+    return finalOut;
 }
 
 async function executeAndRecordTool(
     call: ChatWithToolsResult["toolCalls"][0],
     options?: RunAgentOptions,
 ): Promise<AgentMessage> {
+    if (!options?.abortSignal?.aborted) {
+        await Promise.resolve(
+            options?.onToolCallStarting?.({
+                toolName: call.name,
+                args: call.args,
+            }),
+        );
+    }
+
     const startedAt = Date.now();
     let result: string;
 

@@ -12,6 +12,13 @@ export function slashMenuBar(locale: UiLocale): string {
         : "斜杠命令 · ↑↓ 选择 · Tab 填入 · Enter 执行";
 }
 
+/** /model 子菜单（与 SlashMenu 控件一致） */
+export function modelMenuBar(locale: UiLocale): string {
+    return locale === "en"
+        ? "Models · ↑↓ select · Tab fill id · Enter to switch"
+        : "模型列表 · ↑↓ 选择 · Tab 填入 id · Enter 切换";
+}
+
 export function slashMenuMore(locale: UiLocale, n: number): string {
     return locale === "en" ? `… ${n} more not shown` : `… 另有 ${n} 条未显示`;
 }
@@ -25,14 +32,17 @@ export function tuiHelpLines(
             "Built-in commands:",
             "  /help, /?         This help",
             "  /session <key>    Switch session key (transcript when not using --task)",
+            "  /model <id>       Switch chat model (type `/model ` then ↑↓ Tab)",
             "  /clear            Clear messages in this window",
             "  /status           Session, model, and paths summary",
             "  /workspace        Config files: MCP, templates, skills, agents",
             "  /onboard          Run onboarding",
             "  /doctor           System self-check",
             "  /task ...         Task CLI (same as pnpm cli task ...)",
-            "  /trace ...        Trace CLI (same as pnpm cli trace ...)",
-            "  /exit, /quit      Exit TUI",
+        "  /trace ...        Trace CLI (same as pnpm cli trace ...)",
+        "  /approve-risk     optional if the approval menu is missing (session risk)",
+        "  /task-approve     optional if the approval menu is missing (--task pending)",
+        "  /exit, /quit      Exit TUI",
             "",
             "Type `/` at line start for the menu; ↑↓ select, Tab fill, Enter run.",
             "",
@@ -51,6 +61,7 @@ export function tuiHelpLines(
         "内置命令:",
         "  /help, /?         本帮助",
         "  /session <key>    切换会话键（仅影响未带 --task 时的转录）",
+        "  /model <id>       切换对话模型（输入 `/model ` 后用 ↑↓ / Tab）",
         "  /clear            清空本窗口消息列表",
         "  /status           会话、模型与目录摘要",
         "  /workspace        配置文件路径（MCP、模板、技能、agents）",
@@ -58,6 +69,8 @@ export function tuiHelpLines(
         "  /doctor           运行系统自检",
         "  /task ...         执行任务命令（同 pnpm cli task ...）",
         "  /trace ...        执行 trace 命令（同 pnpm cli trace ...）",
+        "  /approve-risk     无菜单时的备用：会话级高危放行（优先用下方 ↑↓ 菜单）",
+        "  /task-approve     无菜单时的备用：--task 且任务待审批时批准",
         "  /exit, /quit      退出 TUI",
         "",
         "行首输入 `/` 弹出命令列表；↑↓ 选择，Tab 填入，Enter 补全或执行。",
@@ -176,6 +189,57 @@ export function tuiTipsSlash(locale: UiLocale): string {
 
 export function tuiSessionLabel(locale: UiLocale): string {
     return locale === "en" ? "session" : "会话";
+}
+
+/** 高风险拦截后（若需在聊天区追加说明）：TUI 以菜单为准 */
+export function tuiRiskSessionHint(locale: UiLocale): string {
+    return locale === "en"
+        ? "High-risk tool blocked: use the menu below (↑↓ Enter). Do not type approve in the input box."
+        : "高风险已拦截：请用下方菜单 ↑↓ 选择后 Enter；勿在输入框手打「同意」。无菜单时再用 /approve-risk 或输入「同意」。";
+}
+
+export function tuiRiskTaskHint(locale: UiLocale, taskId: string): string {
+    return locale === "en"
+        ? `Task ${taskId} pending approval: use the menu (↑↓ Enter), same idea as Web.`
+        : `任务 ${taskId} 待审批：请用下方菜单 ↑↓ Enter 选择；勿手打「同意」。`;
+}
+
+/** 底栏：有待审批的高风险操作（与「空闲」互斥展示） */
+export function metaRiskAwaiting(locale: UiLocale): string {
+    return locale === "en" ? "approval pending" : "待审批";
+}
+
+/** 高风险 / 任务审批：Claude Code 式列表菜单标题 */
+export function riskMenuTitle(locale: UiLocale, kind: "session" | "task"): string {
+    if (locale === "en") {
+        return kind === "task"
+            ? "This task step needs your approval"
+            : "High-risk action needs your approval";
+    }
+    return kind === "task" ? "任务步骤需要确认" : "高风险操作需要确认";
+}
+
+/** 菜单底部操作说明（与模型列表区风格一致） */
+export function riskMenuFooter(locale: UiLocale): string {
+    return locale === "en"
+        ? "↑↓ select · Enter confirm · Esc reject · no typing in the box"
+        : "↑↓ 选择同意/拒绝 · Enter 确认 · Esc 拒绝 · 无需在输入框输入";
+}
+
+export type RiskMenuEntry = { label: string; submitText: string };
+
+/** 与 parseRiskApprovalIntent 对齐的提交句（菜单 Enter 直接发送） */
+export function riskMenuEntries(locale: UiLocale): [RiskMenuEntry, RiskMenuEntry] {
+    if (locale === "en") {
+        return [
+            { label: "1. Yes, approve", submitText: "approve" },
+            { label: "2. No, reject", submitText: "reject" },
+        ];
+    }
+    return [
+        { label: "1. 同意并继续", submitText: "同意" },
+        { label: "2. 拒绝", submitText: "拒绝" },
+    ];
 }
 
 /** REPL 在 /help 中追加的说明（与 TUI 帮助略有不同） */
@@ -314,6 +378,65 @@ export function tuiGenerating(locale: UiLocale): string {
     return locale === "en" ? "generating response…" : "正在生成回复…";
 }
 
+/** 模型轮次开始前（与 Claude Code 「thinking」类似） */
+export function tuiMetaLlmRound(locale: UiLocale, round: number | undefined): string {
+    const r =
+        round != null && typeof round === "number" && Number.isFinite(round) && round > 0
+            ? String(Math.floor(round))
+            : "?";
+    return locale === "en" ? `Thinking… (round ${r})` : `思考中…（第 ${r} 轮）`;
+}
+
+/** 工具开始执行时的轻量提示行 */
+export function tuiToolRunningLine(locale: UiLocale, toolName: string, argsPreview: string): string {
+    const ap = argsPreview.trim();
+    if (locale === "en") {
+        return ap.length ? `Running ${toolName} — ${ap}` : `Running ${toolName}…`;
+    }
+    return ap.length ? `正在执行「${toolName}」— ${ap}` : `正在执行「${toolName}」…`;
+}
+
+/** 工具卡片左侧标题（按工具名粗分类，贴近 Bash command / Reading file 分区） */
+export function tuiToolCardSectionTitle(locale: UiLocale, toolName: string): string {
+    const n = toolName.trim().toLowerCase();
+    if (n === "exec" || n.includes("bash") || n.includes("shell") || n.includes("terminal")) {
+        return locale === "en" ? "Shell command" : "Shell 命令";
+    }
+    if (n.includes("read")) {
+        return locale === "en" ? "Read" : "读取";
+    }
+    if (n.includes("write") || n.includes("patch") || n.includes("apply")) {
+        return locale === "en" ? "Write / patch" : "写入 / 补丁";
+    }
+    return locale === "en" ? `Tool · ${toolName}` : `工具 · ${toolName}`;
+}
+
+export function tuiToolCardArgsLabel(locale: UiLocale): string {
+    return locale === "en" ? "Arguments" : "参数";
+}
+
+export function tuiToolCardOutputLabel(locale: UiLocale): string {
+    return locale === "en" ? "Output" : "输出";
+}
+
+/** 底栏：贴近 Claude Code 的快捷键提示（本机 TUI 实际为 Ctrl+G/Ctrl+C） */
+export function tuiFooterActionHints(locale: UiLocale): string {
+    return locale === "en" ? "Ctrl+G stop · Ctrl+C exit" : "Ctrl+G 停止 · Ctrl+C 退出";
+}
+
+/** WebSocket「工具执行完毕」一行（与 assistant 风格区分：用 system，便于扫日志） */
+export function tuiToolFinishedLine(
+    locale: UiLocale,
+    toolName: string,
+    ok: boolean,
+    durationMs: number,
+): string {
+    const ms = Math.max(0, Math.round(durationMs));
+    return locale === "en"
+        ? `Tool ${toolName} — ${ok ? "ok" : "failed"} (${ms}ms)`
+        : `工具「${toolName}」${ok ? "完成" : "失败"}（${ms}ms）`;
+}
+
 export function tuiInputFooter(locale: UiLocale): string {
     return locale === "en"
         ? "Enter send · / commands · inverted block is cursor"
@@ -338,6 +461,13 @@ export function metaStopGen(locale: UiLocale): string {
 
 export function errNotConnected(locale: UiLocale): string {
     return locale === "en" ? "Not connected; cannot send." : "未连接，无法发送";
+}
+
+/** 上一条仍在生成时拒绝再发一条（避免客户端 pending 与服务端串行队列错位导致永久「流式」） */
+export function tuiBusyBlockSend(locale: UiLocale): string {
+    return locale === "en"
+        ? "A reply is still generating. Wait for it, or press Ctrl+G to stop, then send again."
+        : "上一条回复仍在生成。请等待结束，或按 Ctrl+G 停止后再发送。";
 }
 
 export function errDoneNoContent(locale: UiLocale): string {
@@ -388,6 +518,30 @@ export function wsStatusLabel(locale: UiLocale, s: string): string {
 
 export function usageSession(locale: UiLocale): string {
     return locale === "en" ? "Usage: /session <key>" : "用法: /session <key>";
+}
+
+export function usageModel(locale: UiLocale): string {
+    return locale === "en"
+        ? "Usage: /model <id> — type `/model ` then pick with ↑↓ and Tab, or: /model zhipu"
+        : "用法: /model <id> — 可先输入 `/model ` 用 ↑↓ 与 Tab 选择，或直接: /model zhipu";
+}
+
+export function modelSwitched(locale: UiLocale, modelId: string, label: string): string {
+    return locale === "en"
+        ? `Chat model set to「${modelId}」(${label}). Next messages use this model.`
+        : `已切换对话模型为「${modelId}」（${label}）。之后发消息将使用此模型。`;
+}
+
+export function modelUnknown(locale: UiLocale, id: string): string {
+    return locale === "en"
+        ? `Unknown model id "${id}". Type /status, or type /model plus Space to open the picker.`
+        : `未知模型 id「${id}」。请用 /status，或输入「/model 」（含空格）打开列表。`;
+}
+
+export function modelsNotLoaded(locale: UiLocale): string {
+    return locale === "en"
+        ? "Model list not ready yet (wait for connection)."
+        : "模型列表尚未就绪（请等待连接建立）。";
 }
 
 export function sessionSwitched(locale: UiLocale, rest: string, taskId?: string): string {

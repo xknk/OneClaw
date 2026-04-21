@@ -30,7 +30,9 @@ export async function awaitRollingPrefetchIdle(
 export function scheduleRollingPrefetchAfterAssistant(
     sessionKey: SessionKey,
     agentId: string,
-    sessionId: string
+    sessionId: string,
+    /** 与本轮对话模型对齐，避免摘要预跑仍走 catalog 默认（例如对话用 Ollama 时摘要误走智谱） */
+    chatModelId?: string | null,
 ): void {
     if (!appConfig.chatRollingPrefetchEnabled) return;
 
@@ -41,7 +43,7 @@ export function scheduleRollingPrefetchAfterAssistant(
             const full = await readMessages(sessionId, agentId);
             const rolling: RollingState = await getRollingState(sessionKey, agentId);
             const built = await buildMessagesForModel(full, rolling, {
-                summaryModelKey: resolveRollingSummaryModelKey(),
+                summaryModelKey: resolveRollingSummaryModelKey(chatModelId ?? undefined),
             });
             await setRollingState(sessionKey, agentId, built.rolling);
         })

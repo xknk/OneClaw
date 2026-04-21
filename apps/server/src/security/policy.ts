@@ -68,18 +68,80 @@ function cloneProfile(p: PermissionProfile): PermissionProfile {
 /**
  * 内置权限表（可被 dataDir/policy-overrides.json 合并覆盖）
  */
+/**
+ * webchat_default 的 exec 白名单：仅匹配「整条 command 字符串」；仍受 execForbiddenSubstrings
+ *（禁止 &&、||、;、`、$( 等串联/注入）与 ONECLAW_EXEC_DENIED_PATTERNS 约束。
+ * 批量操作建议单条 robocopy/xcopy/forfiles，勿在一行内串联多条命令。
+ */
+const WEBCHAT_DEFAULT_EXEC_ALLOWLIST: RegExp[] = [
+    // --- 包管理与开发 ---
+    /^npm\s+run\s+/i,
+    /^pnpm\s+/i,
+    /^yarn\s+/i,
+    /^npx\s+/i,
+    /^node\b/i,
+    /^git\s+/i,
+
+    // --- Windows：直跑常用内置命令（增删改查 / 属性 / ACL）---
+    /^dir\b/i,
+    /^cd\b/i,
+    /^chdir\b/i,
+    /^mkdir\b/i,
+    /^md\b/i,
+    /^rmdir\b/i,
+    /^rd\b/i,
+    /^copy\b/i,
+    /^move\b/i,
+    /^xcopy\b/i,
+    /^robocopy\b/i,
+    /^del\b/i,
+    /^erase\b/i,
+    /^ren\b/i,
+    /^rename\b/i,
+    /^type\b/i,
+    /^more\b/i,
+    /^tree\b/i,
+    /^where\b/i,
+    /^attrib\b/i,
+    /^icacls\b/i,
+    /^cacls\b/i,
+    /^takeown\b/i,
+    /^mklink\b/i,
+    /^fsutil\s+file\b/i,
+    /^forfiles\b/i,
+
+    // cmd /c 前缀：第二令牌限定为上述同类动词，避免放行任意 cmd /c
+    /^cmd(?:\.exe)?\s+\/c\s+(?:dir|cd|chdir|mkdir|md|rmdir|rd|copy|move|xcopy|robocopy|del|erase|ren|rename|type|more|tree|where|attrib|icacls|cacls|takeown|mklink|forfiles)\b/i,
+    /^cmd(?:\.exe)?\s+\/c\s+fsutil\s+file\b/i,
+
+    // PowerShell：仅 -Command / -c 且正文含下列 cmdlet 之一（单行；仍禁 ; 串联）
+    /^powershell(?:\.exe)?\s+(?:-\w+\s+\S+\s+)*-(?:Command|c)\s+[\s\S]{0,12000}?\b(Move-Item|Copy-Item|Remove-Item|New-Item|Get-ChildItem|Get-Item|Set-Item|Get-Content|Set-Content|Add-Content|Clear-Content|Rename-Item|Test-Path|Get-Acl|Set-Acl|Get-ItemProperty|Set-ItemProperty)\b/i,
+    /^pwsh(?:\.exe)?\s+(?:-\w+\s+\S+\s+)*-(?:Command|c)\s+[\s\S]{0,12000}?\b(Move-Item|Copy-Item|Remove-Item|New-Item|Get-ChildItem|Get-Item|Set-Item|Get-Content|Set-Content|Add-Content|Clear-Content|Rename-Item|Test-Path|Get-Acl|Set-Acl|Get-ItemProperty|Set-ItemProperty)\b/i,
+
+    // --- Unix / Git Bash 常见 ---
+    /^ls\b/i,
+    /^cp\b/i,
+    /^mv\b/i,
+    /^rm\b/i,
+    /^chmod\b/i,
+    /^chown\b/i,
+    /^chgrp\b/i,
+    /^cat\b/i,
+    /^touch\b/i,
+    /^ln\b/i,
+    /^stat\b/i,
+    /^head\b/i,
+    /^tail\b/i,
+    /^which\b/i,
+    /^pwd\b/i,
+];
+
 const PROFILES_BASE: Record<PermissionProfileId, PermissionProfile> = {
     webchat_default: {
         allowReadWorkspace: true,
         allowWriteWorkspace: true,
         allowExec: true,
-        execAllowlistPatterns: [
-            /^npm\s+run\s+/i,
-            /^pnpm\s+/i,
-            /^node\s+/i,
-            /^git\s+(status|diff|log)\b/i,
-            /^dir\b/i,
-        ],
+        execAllowlistPatterns: [...WEBCHAT_DEFAULT_EXEC_ALLOWLIST],
         pathDenylistPatterns: SENSITIVE_PATH_DENY,
         execMaxCommandLength: 16_000,
         execForbiddenSubstrings: DEFAULT_EXEC_FORBIDDEN,
@@ -292,6 +354,194 @@ export function evaluateToolPermission(
         return { allow: true };
     }
 
+    if (toolName === "move_file") {
+        if (!profile.allowWriteWorkspace) {
+            return deny("无权限：当前会话禁止移动或重命名文件", "POLICY_MOVE_FORBIDDEN", pid);
+        }
+        const from = typeof args?.from === "string" ? args.from.trim() : "";
+        const to = typeof args?.to === "string" ? args.to.trim() : "";
+        if (!from || !to) return deny("参数错误：move_file 需要 from 与 to", "POLICY_MOVE_PATH_REQUIRED");
+        for (const p of [from, to]) {
+            const pv = checkPathPolicy(p, pOpt);
+            if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        }
+        const toIntent = validateApplyPatchDriveIntent(ctx.userText, to);
+        if (!toIntent.ok) return deny(toIntent.message, toIntent.code, { ...toIntent.meta, ...pid });
+        return { allow: true };
+    }
+
+    if (toolName === "copy_file") {
+        if (!profile.allowWriteWorkspace) {
+            return deny("无权限：当前会话禁止复制文件到 workspace", "POLICY_COPY_FORBIDDEN", pid);
+        }
+        const from = typeof args?.from === "string" ? args.from.trim() : "";
+        const to = typeof args?.to === "string" ? args.to.trim() : "";
+        if (!from || !to) return deny("参数错误：copy_file 需要 from 与 to", "POLICY_COPY_PATH_REQUIRED");
+        for (const p of [from, to]) {
+            const pv = checkPathPolicy(p, pOpt);
+            if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        }
+        const toIntent = validateApplyPatchDriveIntent(ctx.userText, to);
+        if (!toIntent.ok) return deny(toIntent.message, toIntent.code, { ...toIntent.meta, ...pid });
+        return { allow: true };
+    }
+
+    if (toolName === "make_directory") {
+        if (!profile.allowWriteWorkspace) {
+            return deny("无权限：当前会话禁止创建目录", "POLICY_MKDIR_FORBIDDEN", pid);
+        }
+        const pathArg = typeof args?.path === "string" ? args.path.trim() : "";
+        if (!pathArg) return deny("参数错误：make_directory 需要 path", "POLICY_MKDIR_PATH_REQUIRED");
+        const pv = checkPathPolicy(pathArg, pOpt);
+        if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        const pathIntent = validateApplyPatchDriveIntent(ctx.userText, pathArg);
+        if (!pathIntent.ok) return deny(pathIntent.message, pathIntent.code, { ...pathIntent.meta, ...pid });
+        return { allow: true };
+    }
+
+    if (toolName === "file_stat") {
+        if (!profile.allowReadWorkspace) {
+            return deny("无权限：当前会话禁止读取路径信息", "POLICY_STAT_FORBIDDEN", pid);
+        }
+        const pathArg = typeof args?.path === "string" ? args.path : "";
+        const trimmed = pathArg.trim();
+        if (trimmed === "" || trimmed === ".") {
+            return { allow: true };
+        }
+        const pv = checkPathPolicy(pathArg, pOpt);
+        if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        return { allow: true };
+    }
+
+    if (toolName === "read_file_range" || toolName === "file_hash") {
+        if (!profile.allowReadWorkspace) {
+            return deny("无权限：当前会话禁止读取文件", "POLICY_READ_FILE_RANGE_FORBIDDEN", pid);
+        }
+        const pathArg = typeof args?.path === "string" ? args.path : "";
+        if (!pathArg.trim()) {
+            return deny(`参数错误：${toolName} 需要 path`, "POLICY_READ_FILE_RANGE_PATH_REQUIRED");
+        }
+        const pv = checkPathPolicy(pathArg, pOpt);
+        if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        return { allow: true };
+    }
+
+    if (toolName === "create_zip") {
+        if (!profile.allowWriteWorkspace) {
+            return deny("无权限：当前会话禁止打包 zip", "POLICY_ZIP_CREATE_FORBIDDEN", pid);
+        }
+        const paths = args?.paths;
+        const output = typeof args?.output_path === "string" ? args.output_path.trim() : "";
+        if (!Array.isArray(paths) || !paths.length) {
+            return deny("参数错误：create_zip 需要非空 paths 数组", "POLICY_ZIP_PATHS_REQUIRED");
+        }
+        if (!output) {
+            return deny("参数错误：create_zip 需要 output_path", "POLICY_ZIP_OUT_REQUIRED");
+        }
+        for (const p of paths) {
+            if (typeof p !== "string" || !p.trim()) {
+                return deny("参数错误：paths 须全部为字符串", "POLICY_ZIP_PATH_ITEM");
+            }
+            const pv = checkPathPolicy(p, pOpt);
+            if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        }
+        const pvo = checkPathPolicy(output, pOpt);
+        if (pvo) return deny(pvo.message, pvo.code, { ...pvo.meta, ...pid });
+        const outIntent = validateApplyPatchDriveIntent(ctx.userText, output);
+        if (!outIntent.ok) return deny(outIntent.message, outIntent.code, { ...outIntent.meta, ...pid });
+        return { allow: true };
+    }
+
+    if (toolName === "extract_zip") {
+        if (!profile.allowWriteWorkspace) {
+            return deny("无权限：当前会话禁止解压 zip", "POLICY_ZIP_EXTRACT_FORBIDDEN", pid);
+        }
+        const z = typeof args?.zip_path === "string" ? args.zip_path.trim() : "";
+        const t = typeof args?.target_dir === "string" ? args.target_dir.trim() : "";
+        if (!z || !t) {
+            return deny("参数错误：extract_zip 需要 zip_path 与 target_dir", "POLICY_ZIP_EXTRACT_PATHS");
+        }
+        for (const p of [z, t]) {
+            const pv = checkPathPolicy(p, pOpt);
+            if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        }
+        const tIntent = validateApplyPatchDriveIntent(ctx.userText, t);
+        if (!tIntent.ok) return deny(tIntent.message, tIntent.code, { ...tIntent.meta, ...pid });
+        return { allow: true };
+    }
+
+    if (toolName === "batch_file_ops") {
+        if (!profile.allowWriteWorkspace) {
+            return deny("无权限：当前会话禁止批量文件操作", "POLICY_BATCH_FORBIDDEN", pid);
+        }
+        const ops = args?.operations;
+        if (!Array.isArray(ops) || ops.length === 0) {
+            return deny("参数错误：batch_file_ops 需要非空 operations 数组", "POLICY_BATCH_OPS_REQUIRED");
+        }
+        if (ops.length > 30) {
+            return deny("参数错误：batch_file_ops 最多 30 条", "POLICY_BATCH_OPS_LIMIT");
+        }
+        const pathsFromItem = (item: unknown): string[] => {
+            if (!item || typeof item !== "object") return [];
+            const o = item as Record<string, unknown>;
+            const op = typeof o.op === "string" ? o.op : "";
+            if (op === "delete") {
+                return typeof o.path === "string" ? [o.path] : [];
+            }
+            if (op === "move" || op === "copy") {
+                const out: string[] = [];
+                if (typeof o.from === "string") out.push(o.from);
+                if (typeof o.to === "string") out.push(o.to);
+                return out;
+            }
+            if (op === "mkdir") {
+                return typeof o.path === "string" ? [o.path] : [];
+            }
+            return [];
+        };
+        for (const item of ops) {
+            for (const p of pathsFromItem(item)) {
+                const pv = checkPathPolicy(p, pOpt);
+                if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+            }
+        }
+        return { allow: true };
+    }
+
+    if (toolName === "git_read") {
+        if (!profile.allowReadWorkspace) {
+            return deny("无权限：当前会话禁止只读 git", "POLICY_GIT_READ_FORBIDDEN", pid);
+        }
+        const wdRaw = typeof args?.working_directory === "string" ? args.working_directory.trim() : "";
+        const wd = wdRaw === "" ? "." : wdRaw;
+        if (wd !== ".") {
+            const pv = checkPathPolicy(wd, pOpt);
+            if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        }
+        const argv = args?.args;
+        if (!Array.isArray(argv) || !argv.every((x) => typeof x === "string")) {
+            return deny("参数错误：git_read 需要 args 字符串数组", "POLICY_GIT_ARGS_REQUIRED");
+        }
+        return { allow: true };
+    }
+
+    if (toolName === "git_write") {
+        if (!profile.allowWriteWorkspace) {
+            return deny("无权限：当前会话禁止写入类 git", "POLICY_GIT_WRITE_FORBIDDEN", pid);
+        }
+        const wdRaw = typeof args?.working_directory === "string" ? args.working_directory.trim() : "";
+        const wd = wdRaw === "" ? "." : wdRaw;
+        if (wd !== ".") {
+            const pv = checkPathPolicy(wd, pOpt);
+            if (pv) return deny(pv.message, pv.code, { ...pv.meta, ...pid });
+        }
+        const argv = args?.args;
+        if (!Array.isArray(argv) || !argv.every((x) => typeof x === "string")) {
+            return deny("参数错误：git_write 需要 args 字符串数组", "POLICY_GIT_ARGS_REQUIRED");
+        }
+        return { allow: true };
+    }
+
     if (toolName === "search_files") {
         if (!profile.allowReadWorkspace) {
             return deny("无权限：当前会话禁止读取 workspace", "POLICY_SEARCH_FORBIDDEN", pid);
@@ -315,7 +565,13 @@ export function evaluateToolPermission(
         return { allow: true };
     }
 
-    if (toolName === "fetch_url" || toolName === "http_request") {
+    if (
+        toolName === "fetch_url" ||
+        toolName === "http_request" ||
+        toolName === "fetch_readable" ||
+        toolName === "fetch_feed" ||
+        toolName === "web_search"
+    ) {
         if (!appConfig.fetchUrlEnabled) {
             return deny(
                 "无权限：出站 HTTP 工具已在环境中关闭（ONECLAW_FETCH_URL_ENABLED）",
@@ -325,6 +581,13 @@ export function evaluateToolPermission(
         }
         if (ctx.profileId === "qq_group") {
             return deny("无权限：QQ 渠道不允许使用出站 HTTP 工具", "POLICY_FETCH_QQ_FORBIDDEN", pid);
+        }
+        return { allow: true };
+    }
+
+    if (toolName === "dns_resolve") {
+        if (ctx.profileId === "qq_group") {
+            return deny("无权限：QQ 渠道不允许 dns_resolve", "POLICY_DNS_QQ_FORBIDDEN", pid);
         }
         return { allow: true };
     }

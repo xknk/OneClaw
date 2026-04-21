@@ -5,7 +5,25 @@
 import type { Tool } from "../types";
 import type { ToolSchema } from "../../llm/providers/ModelProvider";
 import type { ToolExecutionContext, ToolRiskLevel } from "../../tools/types";
-import { deleteFileInWorkspace, listDirInWorkspace, readFileInWorkspace, searchInWorkspace } from "./workspace";
+import {
+    batchFileOperationsInWorkspace,
+    copyPathInWorkspace,
+    deleteFileInWorkspace,
+    listDirInWorkspace,
+    makeDirectoryInWorkspace,
+    movePathInWorkspace,
+    readFileInWorkspace,
+    readFileRangeInWorkspace,
+    hashFileInWorkspace,
+    searchInWorkspace,
+    statPathInWorkspace,
+} from "./workspace";
+import { executeWebSearch } from "./webSearch";
+import { executeFetchReadable } from "./fetchReadable";
+import { executeFetchFeed } from "./fetchFeed";
+import { executeDnsResolve } from "./dnsResolve";
+import { createZipInWorkspace, extractZipInWorkspace } from "./zipWorkspace";
+import { runGitRead, runGitWrite } from "./gitWorkspace";
 import { applyPatch } from "./applyPatch";
 import { controlledExec } from "./controlledExec";
 import { appConfig } from "../../config/evn";
@@ -61,7 +79,7 @@ function fetchUrlTool(): Tool {
         name: "fetch_url",
         riskLevel: "medium",
         description:
-            "HTTP GET 拉取外部网页或公开 API 的文本内容（仅 http/https）。需要文档、changelog、接口说明时优先使用；内网地址默认禁止，可用 ONECLAW_FETCH_ALLOW_PRIVATE_HOSTS 放开",
+            "HTTP GET 拉取**公网**网页/API（仅 http/https）。**勿**用于本地盘符或 file://；本地目录用 list_directory，本地文件用 read_file。内网默认禁止，可用 ONECLAW_FETCH_ALLOW_PRIVATE_HOSTS 放开",
         async execute(args) {
             return executeFetchUrl(args ?? {});
         },
@@ -73,7 +91,7 @@ function httpRequestTool(): Tool {
         name: "http_request",
         riskLevel: "medium",
         description:
-            "HTTP 请求（GET/POST/PUT/PATCH/DELETE/HEAD），用于调用公开 REST API。与 fetch_url 共用安全策略与 ONECLAW_FETCH_*；勿在参数中泄露密钥",
+            "HTTP 请求用于**网络** REST/JSON API（url 须 http(s)）。勿用于 D:\\\\ 等本地路径；本地用 list_directory/read_file/exec。与 fetch_url 共用 ONECLAW_FETCH_*；勿泄露密钥",
         async execute(args) {
             return executeHttpRequest(args ?? {});
         },
@@ -84,7 +102,7 @@ function listDirectoryTool(): Tool {
     return {
         name: "list_directory",
         description:
-            "列出 workspace 内某目录的直接子项（不递归）。path 空字符串或 . 表示主 workspace 根；返回每行 type<TAB>name",
+            "列出**本地**目录直接子项（不递归）；path 可为相对 workspace 或 file-access 允许的绝对路径。查看文件夹内容用本工具或 exec 的 dir，**勿用 fetch_url**",
         async execute(args) {
             const p = typeof args?.path === "string" ? args.path : "";
             const maxEntries =
@@ -112,6 +130,136 @@ function readFile(): Tool {
                 return await readFileInWorkspace(path);
             } catch (e) {
                 return `读取失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function readFileRangeTool(): Tool {
+    return {
+        name: "read_file_range",
+        riskLevel: "low",
+        description:
+            "按行读取大文件片段，避免整文件撑爆上下文。line_start 从 1 起；可选 line_end（含）。不传 line_end 时最多约 8000 行",
+        async execute(args) {
+            const p = args?.path;
+            const ls = args?.line_start;
+            const le = args?.line_end;
+            if (typeof p !== "string" || !p.trim()) return "缺少参数 path";
+            if (typeof ls !== "number" || !Number.isFinite(ls)) return "缺少参数 line_start（数字）";
+            try {
+                return await readFileRangeInWorkspace(
+                    p.trim(),
+                    ls,
+                    typeof le === "number" && Number.isFinite(le) ? le : undefined,
+                );
+            } catch (e) {
+                return `分段读取失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function fileHashTool(): Tool {
+    return {
+        name: "file_hash",
+        riskLevel: "low",
+        description: "计算文件 SHA256 或 MD5（整文件读取）。algorithm 默认 sha256",
+        async execute(args) {
+            const p = args?.path;
+            const algo = args?.algorithm === "md5" ? "md5" : "sha256";
+            if (typeof p !== "string" || !p.trim()) return "缺少参数 path";
+            try {
+                return await hashFileInWorkspace(p.trim(), algo);
+            } catch (e) {
+                return `哈希失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function webSearchTool(): Tool {
+    return {
+        name: "web_search",
+        riskLevel: "medium",
+        description:
+            "公网网页搜索（Brave Search API）。需在 .env 配置 ONECLAW_BRAVE_API_KEY 或 BRAVE_API_KEY。query 为关键词，count 可选 1–20",
+        async execute(args) {
+            return executeWebSearch(args ?? {});
+        },
+    };
+}
+
+function fetchReadableTool(): Tool {
+    return {
+        name: "fetch_readable",
+        riskLevel: "medium",
+        description:
+            "HTTP GET 网页并粗提正文为纯文本（去 script/style/标签）。规则与 fetch_url 相同；适合长文阅读",
+        async execute(args) {
+            return executeFetchReadable(args ?? {});
+        },
+    };
+}
+
+function fetchFeedTool(): Tool {
+    return {
+        name: "fetch_feed",
+        riskLevel: "medium",
+        description: "拉取 RSS/Atom feed URL，解析若干条标题与链接（启发式解析）",
+        async execute(args) {
+            return executeFetchFeed(args ?? {});
+        },
+    };
+}
+
+function dnsResolveTool(): Tool {
+    return {
+        name: "dns_resolve",
+        riskLevel: "low",
+        description: "DNS 查询：hostname + record_type（A|AAAA|TXT|MX|CNAME，默认 A）",
+        async execute(args) {
+            return executeDnsResolve(args ?? {});
+        },
+    };
+}
+
+function createZipTool(): Tool {
+    return {
+        name: "create_zip",
+        riskLevel: "high",
+        description:
+            "将多个文件或目录打成 zip。paths 为路径数组，output_path 为生成的 .zip 路径（须在 file-access 允许范围内）",
+        async execute(args) {
+            const paths = args?.paths;
+            const out = args?.output_path;
+            if (!Array.isArray(paths) || !paths.every((x) => typeof x === "string")) {
+                return "缺少参数 paths（字符串数组）";
+            }
+            if (typeof out !== "string" || !out.trim()) return "缺少参数 output_path";
+            try {
+                return await createZipInWorkspace(paths as string[], out.trim());
+            } catch (e) {
+                return `打包失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function extractZipTool(): Tool {
+    return {
+        name: "extract_zip",
+        riskLevel: "high",
+        description: "解压 zip 到目标目录（覆盖同名文件）。zip_path 与 target_dir 均为允许路径",
+        async execute(args) {
+            const zipPath = args?.zip_path;
+            const targetDir = args?.target_dir;
+            if (typeof zipPath !== "string" || !zipPath.trim()) return "缺少参数 zip_path";
+            if (typeof targetDir !== "string" || !targetDir.trim()) return "缺少参数 target_dir";
+            try {
+                return await extractZipInWorkspace(zipPath.trim(), targetDir.trim());
+            } catch (e) {
+                return `解压失败: ${e instanceof Error ? e.message : String(e)}`;
             }
         },
     };
@@ -148,6 +296,144 @@ function deleteFile(): Tool {
                 return await deleteFileInWorkspace(p);
             } catch (e) {
                 return `删除失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function moveFileTool(): Tool {
+    return {
+        name: "move_file",
+        riskLevel: "high",
+        description:
+            "移动或重命名允许范围内的文件或目录（同卷 rename）。from/to 为相对 workspace 或允许的绝对路径；跨卷请用 copy_file 再 delete_file",
+        async execute(args) {
+            const from = args?.from;
+            const to = args?.to;
+            if (typeof from !== "string" || !from.trim()) return "缺少参数 from（字符串路径）";
+            if (typeof to !== "string" || !to.trim()) return "缺少参数 to（字符串路径）";
+            try {
+                return await movePathInWorkspace(from.trim(), to.trim());
+            } catch (e) {
+                return `移动失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function copyFileTool(): Tool {
+    return {
+        name: "copy_file",
+        riskLevel: "high",
+        description:
+            "复制文件；复制目录时须设 recursive=true。路径规则同 apply_patch / delete_file",
+        async execute(args) {
+            const from = args?.from;
+            const to = args?.to;
+            const recursive = args?.recursive === true;
+            if (typeof from !== "string" || !from.trim()) return "缺少参数 from（字符串路径）";
+            if (typeof to !== "string" || !to.trim()) return "缺少参数 to（字符串路径）";
+            try {
+                return await copyPathInWorkspace(from.trim(), to.trim(), recursive);
+            } catch (e) {
+                return `复制失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function makeDirectoryTool(): Tool {
+    return {
+        name: "make_directory",
+        riskLevel: "high",
+        description:
+            "创建目录；默认 recursive=true（父级不存在时一并创建）。需 write 级 file-access",
+        async execute(args) {
+            const p = args?.path;
+            const recursive = args?.recursive !== false;
+            if (typeof p !== "string" || !p.trim()) return "缺少参数 path（字符串路径）";
+            try {
+                return await makeDirectoryInWorkspace(p.trim(), recursive);
+            } catch (e) {
+                return `创建目录失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function fileStatTool(): Tool {
+    return {
+        name: "file_stat",
+        riskLevel: "low",
+        description:
+            "查询文件或目录元数据（大小、mtime、mode 等），不读文件内容。path 规则同 read_file",
+        async execute(args) {
+            const p = args?.path;
+            if (typeof p !== "string" || !p.trim()) return "缺少参数 path（字符串路径）";
+            try {
+                return await statPathInWorkspace(p.trim());
+            } catch (e) {
+                return `stat 失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function batchFileOpsTool(): Tool {
+    return {
+        name: "batch_file_ops",
+        riskLevel: "high",
+        description:
+            "批量顺序执行 delete / move / copy / mkdir（最多 30 条），任一步失败则中止。每项为 { op, path?, from?, to?, recursive? }",
+        async execute(args) {
+            const ops = args?.operations;
+            if (!Array.isArray(ops)) return "缺少参数 operations（对象数组）";
+            try {
+                return await batchFileOperationsInWorkspace(ops as Parameters<typeof batchFileOperationsInWorkspace>[0]);
+            } catch (e) {
+                return `批量操作失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function gitReadTool(): Tool {
+    return {
+        name: "git_read",
+        riskLevel: "medium",
+        description:
+            "在允许的 working_directory 下执行**只读** git 子命令（status/diff/log/branch 等），不走 shell。args 为传给 git 的 argv 数组，如 [\"status\",\"--porcelain\"]",
+        async execute(args) {
+            const wd = typeof args?.working_directory === "string" ? args.working_directory : ".";
+            const argv = args?.args;
+            if (!Array.isArray(argv) || !argv.every((x) => typeof x === "string")) {
+                return "需要参数 args：字符串数组（git 子命令及选项）";
+            }
+            try {
+                return await runGitRead(wd, argv as string[]);
+            } catch (e) {
+                return `git_read 失败: ${e instanceof Error ? e.message : String(e)}`;
+            }
+        },
+    };
+}
+
+function gitWriteTool(): Tool {
+    return {
+        name: "git_write",
+        riskLevel: "high",
+        description:
+            "在允许的 working_directory 下执行**写入类** git（add/commit/push/pull/checkout 等），高危需审批。args 为 argv 数组",
+        async execute(args) {
+            const wd = typeof args?.working_directory === "string" ? args.working_directory : ".";
+            const argv = args?.args;
+            if (!Array.isArray(argv) || !argv.every((x) => typeof x === "string")) {
+                return "需要参数 args：字符串数组（git 子命令及选项）";
+            }
+            try {
+                return await runGitWrite(wd, argv as string[]);
+            } catch (e) {
+                return `git_write 失败: ${e instanceof Error ? e.message : String(e)}`;
             }
         },
     };
@@ -209,12 +495,27 @@ const tools: Tool[] = [
     echo(),
     jsonValidateTool(),
     fetchUrlTool(),
+    fetchReadableTool(),
+    fetchFeedTool(),
     httpRequestTool(),
+    webSearchTool(),
+    dnsResolveTool(),
     listDirectoryTool(),
     readFile(),
+    readFileRangeTool(),
+    fileHashTool(),
     searchFiles(),
+    fileStatTool(),
     applyPatchTool(),
     deleteFile(),
+    moveFileTool(),
+    copyFileTool(),
+    makeDirectoryTool(),
+    createZipTool(),
+    extractZipTool(),
+    batchFileOpsTool(),
+    gitReadTool(),
+    gitWriteTool(),
     execTool(),
     generateDailyReportTool(),
 ];
@@ -248,12 +549,15 @@ export function getToolSchemas(): ToolSchema[] {
         {
             name: "fetch_url",
             description:
-                "HTTP GET 获取外部网页或公开 API 的文本；仅 http(s)。参数 max_chars 可选，限制返回正文长度",
+                "HTTP GET 拉取**公网**网页或公开 API 的文本；**仅**支持 http(s) 完整 URL。**禁止**把本地路径当作 url（如 D:\\\\目录、C:\\\\foo、file://）；浏览本地文件夹用 list_directory，读本地文件用 read_file，或用 exec 跑 dir/type 等。参数 max_chars 可选",
             parameters: {
                 type: "object",
                 required: ["url"],
                 properties: {
-                    url: { type: "string", description: "完整 URL，如 https://developer.mozilla.org/zh-CN/docs/Web/API/fetch" },
+                    url: {
+                        type: "string",
+                        description: "必须以 http:// 或 https:// 开头；勿传盘符路径或 file://",
+                    },
                     max_chars: {
                         type: "number",
                         description: "正文最大字符数（可选，受服务器 ONECLAW_FETCH_MAX_RESPONSE_CHARS 上限约束）",
@@ -262,14 +566,38 @@ export function getToolSchemas(): ToolSchema[] {
             },
         },
         {
-            name: "http_request",
-            description:
-                "HTTP 请求（GET/POST/PUT/PATCH/DELETE/HEAD），用于 REST/JSON API；body 或 body_json 用于写操作；headers 可选对象",
+            name: "fetch_readable",
+            description: "GET 网页并提取为纯文本，规则同 fetch_url",
             parameters: {
                 type: "object",
                 required: ["url"],
                 properties: {
-                    url: { type: "string", description: "完整 https URL" },
+                    url: { type: "string", description: "http(s) URL" },
+                    max_chars: { type: "number", description: "最大字符数（可选）" },
+                },
+            },
+        },
+        {
+            name: "fetch_feed",
+            description: "拉取 RSS/Atom feed，解析条目标题与链接",
+            parameters: {
+                type: "object",
+                required: ["url"],
+                properties: {
+                    url: { type: "string", description: "feed 的 http(s) URL" },
+                    max_items: { type: "number", description: "最多条数，默认 15，上限 50" },
+                },
+            },
+        },
+        {
+            name: "http_request",
+            description:
+                "HTTP 请求（GET/POST/PUT/PATCH/DELETE/HEAD），用于 **REST/JSON 等网络 API**；url 须为 http(s)。**禁止**用本工具访问本地盘符路径；本地目录/文件请用 list_directory、read_file 或 exec",
+            parameters: {
+                type: "object",
+                required: ["url"],
+                properties: {
+                    url: { type: "string", description: "https:// 或 http:// 完整 URL，勿传 D:\\\\ 等本地路径" },
                     method: {
                         type: "string",
                         description: "默认 GET；写操作常用 POST、PUT、PATCH、DELETE",
@@ -282,12 +610,40 @@ export function getToolSchemas(): ToolSchema[] {
             },
         },
         {
+            name: "web_search",
+            description: "Brave 网页搜索；需配置 ONECLAW_BRAVE_API_KEY 或 BRAVE_API_KEY",
+            parameters: {
+                type: "object",
+                required: ["query"],
+                properties: {
+                    query: { type: "string", description: "搜索关键词" },
+                    count: { type: "number", description: "结果条数 1–20，默认 8" },
+                },
+            },
+        },
+        {
+            name: "dns_resolve",
+            description: "DNS 查询（A/AAAA/TXT/MX/CNAME）",
+            parameters: {
+                type: "object",
+                required: ["hostname"],
+                properties: {
+                    hostname: { type: "string", description: "域名" },
+                    record_type: { type: "string", description: "A | AAAA | TXT | MX | CNAME，默认 A" },
+                },
+            },
+        },
+        {
             name: "list_directory",
-            description: "列出 workspace 目录下直接子项（不递归）；path 默认根目录",
+            description:
+                "列出**本地**目录的直接子项（不递归）。path 可为相对主 workspace，或在 file-access 允许的**绝对路径**（如已配置 D:\\\\ 额外根）。检查「某文件夹里有哪些文件」必须用本工具或 exec 的 dir，**不要用 fetch_url**",
             parameters: {
                 type: "object",
                 properties: {
-                    path: { type: "string", description: "相对路径，如 apps/web；空或 . 表示主 workspace 根" },
+                    path: {
+                        type: "string",
+                        description: "如 apps/web；或允许的绝对路径如 D:\\\\打印文件；空或 . 表示主 workspace 根",
+                    },
                     max_entries: { type: "number", description: "最多返回条数，默认 200，上限 500" },
                 },
             },
@@ -301,6 +657,42 @@ export function getToolSchemas(): ToolSchema[] {
                 required: ["path"],
                 properties: {
                     path: { type: "string", description: "如 src/index.ts，或配置多根后的绝对路径" },
+                },
+            },
+        },
+        {
+            name: "read_file_range",
+            description: "按行读取文件片段；line_start 从 1 起，line_end 可选",
+            parameters: {
+                type: "object",
+                required: ["path", "line_start"],
+                properties: {
+                    path: { type: "string", description: "文件路径" },
+                    line_start: { type: "number", description: "起始行（含）" },
+                    line_end: { type: "number", description: "结束行（含），可选" },
+                },
+            },
+        },
+        {
+            name: "file_hash",
+            description: "计算文件 SHA256 或 MD5",
+            parameters: {
+                type: "object",
+                required: ["path"],
+                properties: {
+                    path: { type: "string", description: "文件路径" },
+                    algorithm: { type: "string", description: "sha256 或 md5，默认 sha256" },
+                },
+            },
+        },
+        {
+            name: "file_stat",
+            description: "查询路径元数据（大小、mtime、权限位），不读取文件内容",
+            parameters: {
+                type: "object",
+                required: ["path"],
+                properties: {
+                    path: { type: "string", description: "相对 workspace 或允许的绝对路径" },
                 },
             },
         },
@@ -335,6 +727,120 @@ export function getToolSchemas(): ToolSchema[] {
                 type: "object",
                 required: ["path"],
                 properties: { path: { type: "string", description: "要删除的文件路径" } },
+            },
+        },
+        {
+            name: "move_file",
+            description: "移动或重命名文件/目录（同卷）；from、to 为路径",
+            parameters: {
+                type: "object",
+                required: ["from", "to"],
+                properties: {
+                    from: { type: "string", description: "源路径" },
+                    to: { type: "string", description: "目标路径" },
+                },
+            },
+        },
+        {
+            name: "copy_file",
+            description: "复制文件或目录（目录需 recursive=true）",
+            parameters: {
+                type: "object",
+                required: ["from", "to"],
+                properties: {
+                    from: { type: "string", description: "源路径" },
+                    to: { type: "string", description: "目标路径" },
+                    recursive: { type: "boolean", description: "目录复制时为 true" },
+                },
+            },
+        },
+        {
+            name: "make_directory",
+            description: "创建目录，默认 recursive=true",
+            parameters: {
+                type: "object",
+                required: ["path"],
+                properties: {
+                    path: { type: "string", description: "目录路径" },
+                    recursive: { type: "boolean", description: "是否创建父级，默认 true" },
+                },
+            },
+        },
+        {
+            name: "create_zip",
+            description: "将多个路径打包为 zip 文件",
+            parameters: {
+                type: "object",
+                required: ["paths", "output_path"],
+                properties: {
+                    paths: {
+                        type: "array",
+                        items: { type: "string" },
+                        description: "文件或目录路径列表",
+                    },
+                    output_path: { type: "string", description: "输出的 .zip 路径" },
+                },
+            },
+        },
+        {
+            name: "extract_zip",
+            description: "解压 zip 到目标目录",
+            parameters: {
+                type: "object",
+                required: ["zip_path", "target_dir"],
+                properties: {
+                    zip_path: { type: "string", description: "zip 文件路径" },
+                    target_dir: { type: "string", description: "解压目标目录" },
+                },
+            },
+        },
+        {
+            name: "batch_file_ops",
+            description: "批量 delete/move/copy/mkdir，operations 为数组，每项含 op 字段",
+            parameters: {
+                type: "object",
+                required: ["operations"],
+                properties: {
+                    operations: {
+                        type: "array",
+                        description: "如 [{ op: \"delete\", path: \"a.txt\" }, { op: \"mkdir\", path: \"sub\" }]",
+                        items: { type: "object" },
+                    },
+                },
+            },
+        },
+        {
+            name: "git_read",
+            description: "只读 git；working_directory 为仓库目录，args 为 [子命令, ...]",
+            parameters: {
+                type: "object",
+                required: ["args"],
+                properties: {
+                    working_directory: {
+                        type: "string",
+                        description: "相对 workspace 或允许的绝对路径，默认 .",
+                    },
+                    args: {
+                        type: "array",
+                        items: { type: "string" },
+                        description: '例如 ["status","--porcelain"]',
+                    },
+                },
+            },
+        },
+        {
+            name: "git_write",
+            description: "写入类 git（add/commit/push 等），参数同 git_read",
+            parameters: {
+                type: "object",
+                required: ["args"],
+                properties: {
+                    working_directory: {
+                        type: "string",
+                        description: "仓库根目录或子目录（须在允许路径内）",
+                    },
+                    args: { type: "array", items: { type: "string" }, description: '例如 ["add","."]' },
+                },
             },
         },
         {

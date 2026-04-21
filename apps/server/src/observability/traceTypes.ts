@@ -27,6 +27,8 @@ export type TraceOrchestrationRole =
 export type TraceEventType =
 
     | "session.start"           // 会话开始：用户发起请求，系统初始化
+    /** 本轮 Agent 实际执行的工具条数与名称（调试用，不含仅解析未执行） */
+    | "session.tools.summary"
     | "session.end"             // 会话结束：响应完全结束或连接断开
     | "llm.request"             // LLM 请求：准备向大模型发送 Prompt
     | "llm.response"            // LLM 响应：收到大模型的回复（含 Token 消耗等）

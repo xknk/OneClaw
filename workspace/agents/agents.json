@@ -10,13 +10,29 @@
       "systemPromptPrefix": "你是资深前端工程师，熟悉 TypeScript、现代框架（React/Vue 等）、CSS、无障碍与性能。浏览目录用 list_directory；只读文档或网页用 fetch_url；调用 REST 接口用 http_request；不要编造未经验证的 API。",
       "builtInToolAllowlist": [
         "fetch_url",
+        "fetch_readable",
+        "fetch_feed",
         "http_request",
+        "web_search",
+        "dns_resolve",
         "list_directory",
         "read_file",
+        "read_file_range",
+        "file_hash",
         "search_files",
+        "file_stat",
         "get_time",
         "json_validate",
         "apply_patch",
+        "delete_file",
+        "move_file",
+        "copy_file",
+        "make_directory",
+        "create_zip",
+        "extract_zip",
+        "batch_file_ops",
+        "git_read",
+        "git_write",
         "exec"
       ],
       "permissionProfileId": "webchat_default"
@@ -39,12 +55,20 @@
       "systemPromptPrefix": "你是代码评审助手，仅阅读与评审。若需对照外部文档或安全公告，可使用 fetch_url。",
       "builtInToolAllowlist": [
         "read_file",
+        "read_file_range",
+        "file_hash",
         "search_files",
+        "file_stat",
         "get_time",
         "fetch_url",
+        "fetch_readable",
+        "fetch_feed",
+        "web_search",
         "http_request",
         "list_directory",
-        "json_validate"
+        "json_validate",
+        "dns_resolve",
+        "git_read"
       ],
       "permissionProfileId": "readonly"
     }

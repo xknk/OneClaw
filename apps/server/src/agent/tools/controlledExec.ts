@@ -3,7 +3,24 @@
  */
 
 import { spawn } from "child_process";
+import iconv from "iconv-lite";
 import { appConfig } from "../../config/evn"; // 引入全局配置，如默认超时时间
+
+/** 将子进程字节流解码为字符串（中文 Windows cmd 默认 GBK，非 UTF-8） */
+function decodeExecChunk(chunk: Buffer): string {
+    const enc = appConfig.execStdoutEncoding.trim().toLowerCase();
+    if (enc === "utf8" || enc === "utf-8") {
+        return chunk.toString("utf8");
+    }
+    if (process.platform === "win32" && (enc === "" || enc === "gbk" || enc === "cp936")) {
+        try {
+            return iconv.decode(chunk, "cp936");
+        } catch {
+            return chunk.toString("utf8");
+        }
+    }
+    return chunk.toString("utf8");
+}
 
 // 定义执行结果的接口
 export interface ExecResult {
@@ -70,16 +87,16 @@ export async function controlledExec(
             return s.slice(0, maxChars) + "\n...[输出已截断]";
         };
 
-        // 监听标准输出流
+        // 监听标准输出流（Windows 默认 OEM/GBK，勿用 utf8 盲解）
         proc.stdout?.on("data", (chunk: Buffer) => {
-            stdout += chunk.toString();
+            stdout += decodeExecChunk(chunk);
             // 策略：一旦累计输出超过限制，立即杀掉进程防止内存溢出
             if (stdout.length > maxChars) proc.kill("SIGTERM");
         });
 
         // 监听标准错误流
         proc.stderr?.on("data", (chunk: Buffer) => {
-            stderr += chunk.toString();
+            stderr += decodeExecChunk(chunk);
             if (stderr.length > maxChars) proc.kill("SIGTERM");
         });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ToolSchema } from "@/llm/providers/ModelProvider";
 import * as model from "@/llm/model";
-import { runAgent } from "@/agent/runAgent";
+import { runAgent, EMPTY_REPLY_FALLBACK } from "@/agent/runAgent";
 import { ToolPolicyError } from "@/tasks/stepToolPolicy";
 
 // 1. 【模拟模型层】：模拟 chatWithModelWithTools 函数，避免测试时产生真实的 API 开销
@@ -49,6 +49,18 @@ describe("runAgent", () => {
     // 每次测试前重置 Mock 状态，确保测试用例之间互不干扰（计数清零、配置清空）
     beforeEach(() => {
         vi.mocked(model.chatWithModelWithTools).mockReset();
+    });
+
+    it("无 toolCalls 且正文为空时返回兜底文案（不再给上游空字符串）", async () => {
+        vi.mocked(model.chatWithModelWithTools).mockResolvedValueOnce({
+            content: "",
+            toolCalls: [],
+        });
+
+        const out = await runAgent([{ role: "user", content: "hi" }], { toolSchemas });
+
+        expect(out).toBe(EMPTY_REPLY_FALLBACK);
+        expect(model.chatWithModelWithTools).toHaveBeenCalledTimes(1);
     });
 
     it("无 toolCalls 时直接返回模型文本", async () => {
@@ -123,6 +135,32 @@ describe("runAgent", () => {
         // 验证调用次数被截断在了 2 次，没有无限循环
         expect(model.chatWithModelWithTools).toHaveBeenCalledTimes(2);
         expect(out).toBe("仍想继续调工具");
+    });
+
+    it("达到 maxToolRounds 且最后一轮正文为空时追加无工具合成轮", async () => {
+        vi.mocked(model.chatWithModelWithTools)
+            .mockResolvedValueOnce({
+                content: "",
+                toolCalls: [{ name: "echo", args: { text: "x" } }],
+            })
+            .mockResolvedValueOnce({
+                content: "",
+                toolCalls: [{ name: "echo", args: { text: "y" } }],
+            })
+            .mockResolvedValueOnce({
+                content: "合成后的目录列表说明",
+                toolCalls: [],
+            });
+
+        const out = await runAgent([{ role: "user", content: "列目录" }], {
+            toolSchemas,
+            maxToolRounds: 2,
+        });
+
+        expect(out).toBe("合成后的目录列表说明");
+        expect(model.chatWithModelWithTools).toHaveBeenCalledTimes(3);
+        const synthCall = vi.mocked(model.chatWithModelWithTools).mock.calls[2]![0];
+        expect(JSON.stringify(synthCall)).toContain("请根据上述工具执行结果");
     });
 
     it("toolGuard 拒绝时拒绝原因进入 tool 结果", async () => {

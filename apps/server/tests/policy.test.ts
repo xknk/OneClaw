@@ -24,15 +24,24 @@ describe("checkToolPermission", () => {
         expect(checkToolPermission(c, "exec", { command: "npm run build" })).toMatch(/禁止执行/);
     });
 
+    it("readonly 应禁止 move/copy/git_write，允许 file_stat 与 git_read", () => {
+        const c = ctx({ profileId: "readonly" });
+        expect(checkToolPermission(c, "move_file", { from: "a", to: "b" })).toMatch(/移动|禁止/);
+        expect(checkToolPermission(c, "copy_file", { from: "a", to: "b" })).toMatch(/复制|禁止/);
+        expect(checkToolPermission(c, "git_write", { args: ["add", "."] })).toMatch(/git|禁止/);
+        expect(checkToolPermission(c, "file_stat", { path: "src/a.ts" })).toBeNull();
+        expect(checkToolPermission(c, "git_read", { args: ["status"], working_directory: "." })).toBeNull();
+    });
+
     it("webchat_default 角色应根据白名单(allowlist)拒绝非法命令", () => {
         const c = ctx({ profileId: "webchat_default" });
         expect(checkToolPermission(c, "exec", { command: "npm run lint" })).toBeNull();
-        expect(checkToolPermission(c, "exec", { command: "rm -rf /" })).toMatch(/allowlist/);
+        expect(checkToolPermission(c, "exec", { command: "definitely-not-on-allowlist-xyz" })).toMatch(/allowlist/);
     });
 
-    it("文件变更类 exec 命令应提示改用 apply_patch", () => {
+    it("文件变更类 exec 且未列入白名单时应提示改用 apply_patch", () => {
         const c = ctx({ profileId: "webchat_default" });
-        const msg = checkToolPermission(c, "exec", { command: "mkdir D:\\update" });
+        const msg = checkToolPermission(c, "exec", { command: "echo x > D:\\__policy_test_redirect__.txt" });
         expect(msg).toMatch(/apply_patch/);
     });
 
@@ -73,14 +82,14 @@ describe("checkToolPermission", () => {
 describe("evaluateToolPermission", () => {
     it("exec 不在 allowlist -> POLICY_EXEC_ALLOWLIST", () => {
         const c = ctx({ profileId: "webchat_default" });
-        const r = evaluateToolPermission(c, "exec", { command: "rm -rf /" });
+        const r = evaluateToolPermission(c, "exec", { command: "unknown-cli-tool-abc" });
         expect(r.allow).toBe(false);
         if (!r.allow) expect(r.errorCode).toBe("POLICY_EXEC_ALLOWLIST");
     });
 
-    it("文件变更类 exec 命令 -> POLICY_EXEC_FILE_OP_USE_APPLY_PATCH", () => {
+    it("文件变更类 exec 且未列入白名单 -> POLICY_EXEC_FILE_OP_USE_APPLY_PATCH", () => {
         const c = ctx({ profileId: "webchat_default" });
-        const r = evaluateToolPermission(c, "exec", { command: "mkdir D:\\update" });
+        const r = evaluateToolPermission(c, "exec", { command: "echo x > out.txt" });
         expect(r.allow).toBe(false);
         if (!r.allow) expect(r.errorCode).toBe("POLICY_EXEC_FILE_OP_USE_APPLY_PATCH");
     });
